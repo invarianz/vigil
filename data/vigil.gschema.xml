@@ -31,7 +31,7 @@
       <summary>Maximum interval between screenshots in seconds</summary>
     </key>
 
-    <!-- Upload -->
+    <!-- Upload (HTTP endpoint) -->
     <key name="endpoint-url" type="s">
       <default>''</default>
       <summary>HTTPS endpoint URL for uploading screenshots</summary>
@@ -39,6 +39,20 @@
     <key name="api-token" type="s">
       <default>''</default>
       <summary>API authentication token</summary>
+    </key>
+
+    <!-- Matrix transport -->
+    <key name="matrix-homeserver-url" type="s">
+      <default>''</default>
+      <summary>Matrix homeserver URL (or pantalaimon proxy URL for E2EE)</summary>
+    </key>
+    <key name="matrix-access-token" type="s">
+      <default>''</default>
+      <summary>Matrix access token</summary>
+    </key>
+    <key name="matrix-room-id" type="s">
+      <default>''</default>
+      <summary>Matrix room ID to send screenshots to</summary>
     </key>
 
     <!-- Device -->

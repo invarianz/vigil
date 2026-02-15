@@ -13,6 +13,9 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
 
     private Gtk.Entry endpoint_entry;
     private Gtk.PasswordEntry token_entry;
+    private Gtk.Entry matrix_homeserver_entry;
+    private Gtk.PasswordEntry matrix_token_entry;
+    private Gtk.Entry matrix_room_entry;
     private Gtk.SpinButton min_interval_spin;
     private Gtk.SpinButton max_interval_spin;
     private Gtk.SpinButton retention_spin;
@@ -69,6 +72,53 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         upload_grid.attach (endpoint_entry, 1, 0);
         upload_grid.attach (token_label, 0, 1);
         upload_grid.attach (token_entry, 1, 1);
+
+        // --- Matrix section ---
+        var matrix_header = new Granite.HeaderLabel ("Matrix (recommended)");
+
+        var matrix_hs_label = new Gtk.Label ("Homeserver URL") {
+            halign = Gtk.Align.START
+        };
+        matrix_homeserver_entry = new Gtk.Entry () {
+            placeholder_text = "http://localhost:8009 (pantalaimon) or https://matrix.org",
+            hexpand = true
+        };
+        settings.bind ("matrix-homeserver-url", matrix_homeserver_entry, "text", SettingsBindFlags.DEFAULT);
+
+        var matrix_token_label = new Gtk.Label ("Access token") {
+            halign = Gtk.Align.START
+        };
+        matrix_token_entry = new Gtk.PasswordEntry () {
+            show_peek_icon = true,
+            hexpand = true
+        };
+        settings.bind ("matrix-access-token", matrix_token_entry, "text", SettingsBindFlags.DEFAULT);
+
+        var matrix_room_label = new Gtk.Label ("Room ID") {
+            halign = Gtk.Align.START
+        };
+        matrix_room_entry = new Gtk.Entry () {
+            placeholder_text = "!roomid:matrix.org",
+            hexpand = true
+        };
+        settings.bind ("matrix-room-id", matrix_room_entry, "text", SettingsBindFlags.DEFAULT);
+
+        var matrix_grid = new Gtk.Grid () {
+            row_spacing = 8,
+            column_spacing = 16,
+            margin_top = 8,
+            margin_bottom = 8,
+            margin_start = 16,
+            margin_end = 16
+        };
+        matrix_grid.add_css_class (Granite.STYLE_CLASS_CARD);
+
+        matrix_grid.attach (matrix_hs_label, 0, 0);
+        matrix_grid.attach (matrix_homeserver_entry, 1, 0);
+        matrix_grid.attach (matrix_token_label, 0, 1);
+        matrix_grid.attach (matrix_token_entry, 1, 1);
+        matrix_grid.attach (matrix_room_label, 0, 2);
+        matrix_grid.attach (matrix_room_entry, 1, 2);
 
         // --- Schedule section ---
         var schedule_header = new Granite.HeaderLabel ("Schedule");
@@ -160,6 +210,8 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         system_grid.attach (autostart_switch, 1, 0);
 
         // Assemble the view
+        append (matrix_header);
+        append (matrix_grid);
         append (upload_header);
         append (upload_grid);
         append (schedule_header);

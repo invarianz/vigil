@@ -27,6 +27,7 @@ unit_tests = {
     'UploadService': 'UploadServiceTest.vala',
     'HeartbeatService': 'HeartbeatServiceTest.vala',
     'TamperDetectionService': 'TamperDetectionServiceTest.vala',
+    'MatrixTransportService': 'MatrixTransportServiceTest.vala',
 }
 
 foreach name, source : unit_tests

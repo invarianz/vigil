@@ -53,6 +53,7 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         _upload_svc = new Vigil.Services.UploadService ();
         _storage_svc = new Vigil.Services.StorageService ();
         _heartbeat_svc = new Vigil.Services.HeartbeatService ();
+        var matrix_svc = new Vigil.Services.MatrixTransportService ();
         var settings = new GLib.Settings ("io.github.invarianz.vigil");
         _tamper_svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -63,6 +64,7 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
             _storage_svc,
             _heartbeat_svc,
             _tamper_svc,
+            matrix_svc,
             settings
         );
 

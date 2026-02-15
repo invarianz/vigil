@@ -54,6 +54,7 @@ public class Vigil.Daemon.DBusServer : Object {
     private Vigil.Services.StorageService _storage_svc;
     private Vigil.Services.HeartbeatService _heartbeat_svc;
     private Vigil.Services.TamperDetectionService _tamper_svc;
+    private Vigil.Services.MatrixTransportService _matrix_svc;
     private GLib.Settings _settings;
 
     private GenericArray<string> _recent_tamper_events;
@@ -127,6 +128,7 @@ public class Vigil.Daemon.DBusServer : Object {
         Vigil.Services.StorageService storage_svc,
         Vigil.Services.HeartbeatService heartbeat_svc,
         Vigil.Services.TamperDetectionService tamper_svc,
+        Vigil.Services.MatrixTransportService matrix_svc,
         GLib.Settings settings
     ) {
         _screenshot_svc = screenshot_svc;
@@ -135,6 +137,7 @@ public class Vigil.Daemon.DBusServer : Object {
         _storage_svc = storage_svc;
         _heartbeat_svc = heartbeat_svc;
         _tamper_svc = tamper_svc;
+        _matrix_svc = matrix_svc;
         _settings = settings;
         _recent_tamper_events = new GenericArray<string> ();
 
@@ -245,11 +248,7 @@ public class Vigil.Daemon.DBusServer : Object {
             screenshot_capture_failed (msg);
         });
 
-        _upload_svc.upload_succeeded.connect ((path) => {
-            _storage_svc.mark_uploaded (path);
-            _heartbeat_svc.pending_upload_count = pending_upload_count;
-            status_changed ();
-        });
+        // upload_succeeded is handled directly in handle_capture now
 
         _tamper_svc.tamper_detected.connect ((event_type, details) => {
             _heartbeat_svc.report_tamper_event ("%s: %s".printf (event_type, details));
@@ -259,6 +258,11 @@ public class Vigil.Daemon.DBusServer : Object {
                 _recent_tamper_events.remove_index (0);
             }
             tamper_event (event_type, details);
+
+            // Send tamper alerts via Matrix
+            if (_matrix_svc.is_configured) {
+                _matrix_svc.send_alert.begin (event_type, details);
+            }
         });
 
         _heartbeat_svc.heartbeat_sent.connect (() => {
@@ -285,6 +289,11 @@ public class Vigil.Daemon.DBusServer : Object {
         _upload_svc.api_token = _settings.get_string ("api-token");
         _upload_svc.device_id = get_or_create_device_id ();
         _storage_svc.max_local_screenshots = _settings.get_int ("max-local-screenshots");
+
+        // Matrix transport settings
+        _matrix_svc.homeserver_url = _settings.get_string ("matrix-homeserver-url");
+        _matrix_svc.access_token = _settings.get_string ("matrix-access-token");
+        _matrix_svc.room_id = _settings.get_string ("matrix-room-id");
     }
 
     private void bind_settings () {
@@ -305,6 +314,15 @@ public class Vigil.Daemon.DBusServer : Object {
         _settings.changed["max-local-screenshots"].connect (() => {
             _storage_svc.max_local_screenshots = _settings.get_int ("max-local-screenshots");
         });
+        _settings.changed["matrix-homeserver-url"].connect (() => {
+            _matrix_svc.homeserver_url = _settings.get_string ("matrix-homeserver-url");
+        });
+        _settings.changed["matrix-access-token"].connect (() => {
+            _matrix_svc.access_token = _settings.get_string ("matrix-access-token");
+        });
+        _settings.changed["matrix-room-id"].connect (() => {
+            _matrix_svc.room_id = _settings.get_string ("matrix-room-id");
+        });
     }
 
     private async void handle_capture () {
@@ -319,7 +337,25 @@ public class Vigil.Daemon.DBusServer : Object {
             }
 
             var now = new DateTime.now_local ();
-            yield _upload_svc.upload (path, now);
+            bool delivered = false;
+
+            // Try Matrix transport first (preferred)
+            if (_matrix_svc.is_configured) {
+                delivered = yield _matrix_svc.send_screenshot (path, now);
+            }
+
+            // Also try HTTP endpoint if configured
+            if (_upload_svc.endpoint_url != "") {
+                yield _upload_svc.upload (path, now);
+            }
+
+            // Mark uploaded if delivered via either transport
+            if (delivered) {
+                _storage_svc.mark_uploaded (path);
+                _heartbeat_svc.pending_upload_count = pending_upload_count;
+                status_changed ();
+            }
+
             _storage_svc.cleanup_old_screenshots ();
         }
     }
@@ -333,7 +369,21 @@ public class Vigil.Daemon.DBusServer : Object {
         debug ("Retrying %d pending uploads", (int) pending.length);
         for (int i = 0; i < pending.length; i++) {
             var item = pending[i];
-            yield _upload_svc.upload (item.file_path, item.capture_time ?? new DateTime.now_local ());
+            var now = item.capture_time ?? new DateTime.now_local ();
+            bool delivered = false;
+
+            if (_matrix_svc.is_configured) {
+                delivered = yield _matrix_svc.send_screenshot (item.file_path, now);
+            }
+
+            if (_upload_svc.endpoint_url != "") {
+                var http_ok = yield _upload_svc.upload (item.file_path, now);
+                delivered = delivered || http_ok;
+            }
+
+            if (delivered) {
+                _storage_svc.mark_uploaded (item.file_path);
+            }
         }
     }
 

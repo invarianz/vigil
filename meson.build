@@ -79,6 +79,7 @@ service_src_files = files(
     'src' / 'Services' / 'StorageService.vala',
     'src' / 'Services' / 'HeartbeatService.vala',
     'src' / 'Services' / 'TamperDetectionService.vala',
+    'src' / 'Services' / 'MatrixTransportService.vala',
     'src' / 'Utils' / 'SessionDetector.vala',
 )
 
