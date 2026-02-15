@@ -534,9 +534,59 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
-     * Upload a screenshot image to the Matrix content repository.
+     * Upload raw bytes to the Matrix content repository.
      *
-     * @param file_path Path to the PNG screenshot file.
+     * @param data The bytes to upload.
+     * @param content_type MIME type (e.g. "image/png" or "application/octet-stream").
+     * @param filename Filename for the upload.
+     * @return The mxc:// content URI, or null on failure.
+     */
+    public async string? upload_bytes (Bytes data, string content_type, string filename) {
+        if (!is_configured) {
+            return null;
+        }
+
+        try {
+            var upload_url = "%s/_matrix/media/v3/upload?filename=%s".printf (
+                homeserver_url,
+                GLib.Uri.escape_string (filename, null, true)
+            );
+
+            var message = new Soup.Message ("POST", upload_url);
+            message.set_request_body_from_bytes (content_type, data);
+            message.get_request_headers ().append (
+                "Authorization", "Bearer %s".printf (access_token)
+            );
+
+            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("Matrix media upload failed (HTTP %u): %s", status, resp ?? "");
+                return null;
+            }
+
+            var parser = new Json.Parser ();
+            parser.load_from_data ((string) response_bytes.get_data ());
+            var root = parser.get_root ().get_object ();
+
+            if (root.has_member ("content_uri")) {
+                return root.get_string_member ("content_uri");
+            } else {
+                warning ("Matrix upload response missing content_uri");
+                return null;
+            }
+        } catch (Error e) {
+            warning ("Matrix media upload error: %s", e.message);
+            return null;
+        }
+    }
+
+    /**
+     * Upload a file to the Matrix content repository.
+     *
+     * @param file_path Path to the file to upload.
      * @return The mxc:// content URI, or null on failure.
      */
     public async string? upload_media (string file_path) {
@@ -564,36 +614,7 @@ public class Vigil.Services.MatrixTransportService : Object {
             input_stream.close ();
 
             var filename = Path.get_basename (file_path);
-            var upload_url = "%s/_matrix/media/v3/upload?filename=%s".printf (
-                homeserver_url,
-                GLib.Uri.escape_string (filename, null, true)
-            );
-
-            var message = new Soup.Message ("POST", upload_url);
-            message.set_request_body_from_bytes ("image/png", bytes);
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-
-            if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Matrix media upload failed (HTTP %u): %s", status, resp ?? "");
-                return null;
-            }
-
-            var parser = new Json.Parser ();
-            parser.load_from_data ((string) response_bytes.get_data ());
-            var root = parser.get_root ().get_object ();
-
-            if (root.has_member ("content_uri")) {
-                return root.get_string_member ("content_uri");
-            } else {
-                warning ("Matrix upload response missing content_uri");
-                return null;
-            }
+            return yield upload_bytes (bytes, "image/png", filename);
         } catch (Error e) {
             warning ("Matrix media upload error: %s", e.message);
             return null;
@@ -677,6 +698,11 @@ public class Vigil.Services.MatrixTransportService : Object {
 
     /**
      * Upload and send a screenshot to the Matrix room.
+     *
+     * When E2EE is enabled, the image is AES-256-CTR encrypted before
+     * upload per the Matrix encrypted attachments spec. The decryption
+     * key is embedded in the Megolm-encrypted event so only room
+     * members can view the screenshot.
      */
     public async bool send_screenshot (string file_path, DateTime capture_time) {
         if (!is_configured) {
@@ -686,16 +712,47 @@ public class Vigil.Services.MatrixTransportService : Object {
             return false;
         }
 
-        // Step 1: Upload the image
-        var content_uri = yield upload_media (file_path);
+        // Read file into memory
+        uint8[] file_data;
+        try {
+            var file = File.new_for_path (file_path);
+            if (!file.query_exists ()) {
+                screenshot_send_failed (file_path, "File not found: %s".printf (file_path));
+                return false;
+            }
+
+            var file_info = yield file.query_info_async (
+                "standard::size",
+                FileQueryInfoFlags.NONE,
+                Priority.DEFAULT,
+                null
+            );
+            var file_size = file_info.get_size ();
+
+            var input_stream = yield file.read_async (Priority.DEFAULT, null);
+            var bytes = yield input_stream.read_bytes_async ((size_t) file_size, Priority.DEFAULT, null);
+            input_stream.close ();
+            file_data = bytes.get_data ();
+        } catch (Error e) {
+            screenshot_send_failed (file_path, "Failed to read file: %s".printf (e.message));
+            return false;
+        }
+
+        var time_str = capture_time.format ("%Y-%m-%d %H:%M:%S");
+        var body = "Screenshot %s".printf (time_str);
+        var filename = Path.get_basename (file_path);
+
+        // When E2EE is active, encrypt the attachment before upload
+        if (encryption != null && encryption.is_ready) {
+            return yield send_encrypted_screenshot (file_data, filename, body);
+        }
+
+        // No E2EE: upload plaintext (fallback)
+        var content_uri = yield upload_bytes (new Bytes (file_data), "image/png", filename);
         if (content_uri == null) {
             screenshot_send_failed (file_path, "Media upload failed");
             return false;
         }
-
-        // Step 2: Send the image event
-        var time_str = capture_time.format ("%Y-%m-%d %H:%M:%S");
-        var body = "Screenshot %s".printf (time_str);
 
         var builder = new Json.Builder ();
         builder.begin_object ();
@@ -722,8 +779,110 @@ public class Vigil.Services.MatrixTransportService : Object {
             return false;
         }
 
-        debug ("Matrix: sent screenshot %s as %s", file_path, event_id);
+        debug ("Matrix: sent screenshot %s as %s (unencrypted)", file_path, event_id);
         screenshot_sent (file_path, event_id);
+        return true;
+    }
+
+    /**
+     * Encrypt a screenshot with AES-256-CTR, upload the ciphertext,
+     * and send the event with embedded decryption metadata.
+     */
+    private async bool send_encrypted_screenshot (uint8[] plaintext_data,
+                                                   string filename,
+                                                   string body) {
+        // Step 1: Encrypt the file with AES-256-CTR
+        var enc_result = encryption.encrypt_attachment (plaintext_data);
+        if (enc_result == null) {
+            screenshot_send_failed (filename, "Attachment encryption failed");
+            return false;
+        }
+
+        // Step 2: Upload encrypted blob (opaque binary, not image/png)
+        var content_uri = yield upload_bytes (
+            new Bytes (enc_result.ciphertext),
+            "application/octet-stream",
+            filename
+        );
+        if (content_uri == null) {
+            screenshot_send_failed (filename, "Encrypted media upload failed");
+            return false;
+        }
+
+        // Step 3: Build event with EncryptedFile metadata per Matrix spec
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("msgtype");
+        builder.add_string_value ("m.image");
+        builder.set_member_name ("body");
+        builder.add_string_value (body);
+
+        // "file" object replaces "url" for encrypted attachments
+        builder.set_member_name ("file");
+        builder.begin_object ();
+        builder.set_member_name ("url");
+        builder.add_string_value (content_uri);
+        builder.set_member_name ("mimetype");
+        builder.add_string_value ("image/png");
+
+        // JWK key
+        builder.set_member_name ("key");
+        builder.begin_object ();
+        builder.set_member_name ("kty");
+        builder.add_string_value ("oct");
+        builder.set_member_name ("key_ops");
+        builder.begin_array ();
+        builder.add_string_value ("encrypt");
+        builder.add_string_value ("decrypt");
+        builder.end_array ();
+        builder.set_member_name ("alg");
+        builder.add_string_value ("A256CTR");
+        builder.set_member_name ("k");
+        builder.add_string_value (
+            Vigil.Services.EncryptionService.base64url_encode_unpadded (enc_result.key)
+        );
+        builder.set_member_name ("ext");
+        builder.add_boolean_value (true);
+        builder.end_object (); // key
+
+        builder.set_member_name ("iv");
+        builder.add_string_value (
+            Vigil.Services.EncryptionService.base64_encode_unpadded (enc_result.iv)
+        );
+
+        builder.set_member_name ("hashes");
+        builder.begin_object ();
+        builder.set_member_name ("sha256");
+        builder.add_string_value (
+            Vigil.Services.EncryptionService.base64_encode_unpadded (enc_result.sha256)
+        );
+        builder.end_object (); // hashes
+
+        builder.set_member_name ("v");
+        builder.add_string_value ("v2");
+        builder.end_object (); // file
+
+        builder.set_member_name ("info");
+        builder.begin_object ();
+        builder.set_member_name ("mimetype");
+        builder.add_string_value ("image/png");
+        builder.end_object ();
+
+        builder.end_object (); // root
+
+        var gen = new Json.Generator ();
+        gen.set_root (builder.get_root ());
+        var content_json = gen.to_data (null);
+
+        // Step 4: Send via Megolm-encrypted room event
+        var event_id = yield send_room_event ("m.room.message", content_json);
+        if (event_id == null) {
+            screenshot_send_failed (filename, "Failed to send encrypted image event");
+            return false;
+        }
+
+        debug ("Matrix: sent encrypted screenshot %s as %s", filename, event_id);
+        screenshot_sent (filename, event_id);
         return true;
     }
 

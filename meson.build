@@ -22,6 +22,7 @@ soup_dep = dependency('libsoup-3.0', version: '>= 3.0')
 portal_dep = dependency('libportal', version: '>= 0.6')
 portal_gtk4_dep = dependency('libportal-gtk4', version: '>= 0.6')
 olm_dep = dependency('olm', version: '>= 3.0')
+openssl_dep = dependency('openssl', version: '>= 1.1.0')
 
 add_project_arguments(
     '-DGETTEXT_PACKAGE="@0@"'.format(app_id),
@@ -59,6 +60,7 @@ service_deps = [
     soup_dep,
     portal_dep,
     olm_dep,
+    openssl_dep,
 ]
 
 # All dependencies including GTK/Granite (for the GUI app)
@@ -73,6 +75,7 @@ all_dependencies = [
     portal_dep,
     portal_gtk4_dep,
     olm_dep,
+    openssl_dep,
 ]
 
 # ──────────────────────────────────────────────────────────────

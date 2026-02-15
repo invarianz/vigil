@@ -601,6 +601,115 @@ public class Vigil.Services.EncryptionService : Object {
         }
     }
 
+    /* ───── Encrypted attachments (AES-256-CTR per Matrix spec) ───── */
+
+    /**
+     * Result of encrypting a file attachment for Matrix.
+     */
+    public struct EncryptedAttachment {
+        /** The encrypted ciphertext bytes. */
+        public uint8[] ciphertext;
+        /** 256-bit AES key, raw bytes (32 bytes). */
+        public uint8[] key;
+        /** 128-bit IV with high-order bits as counter (16 bytes). */
+        public uint8[] iv;
+        /** SHA-256 hash of the ciphertext, raw bytes (32 bytes). */
+        public uint8[] sha256;
+    }
+
+    /**
+     * Encrypt file data for a Matrix encrypted attachment.
+     *
+     * Per the Matrix spec, attachments are encrypted with AES-256-CTR
+     * before upload. The key, IV, and SHA-256 hash are embedded in the
+     * Megolm-encrypted event so only room members can decrypt.
+     *
+     * @param plaintext The raw file bytes to encrypt.
+     * @return The encrypted attachment data, or null on failure.
+     */
+    public EncryptedAttachment? encrypt_attachment (uint8[] plaintext) {
+        // Generate 256-bit key and 128-bit IV
+        var key = generate_random (32);
+        var iv = generate_random (16);
+
+        // Matrix spec: set the lower 8 bytes of IV to zero (counter portion)
+        // The upper 8 bytes are random, lower 8 are the counter starting at 0
+        for (int i = 8; i < 16; i++) {
+            iv[i] = 0;
+        }
+
+        var ctx = new OpenSSL.CipherCtx ();
+        if (ctx.encrypt_init (OpenSSL.aes_256_ctr (), null, key, iv) != 1) {
+            warning ("EVP_EncryptInit_ex failed");
+            return null;
+        }
+        ctx.set_padding (0); // CTR mode doesn't need padding
+
+        // Allocate output buffer (CTR mode: ciphertext length == plaintext length)
+        var ciphertext = new uint8[plaintext.length + 16]; // +16 for block safety
+        int out_len = 0;
+        int final_len = 0;
+
+        if (ctx.encrypt_update (ciphertext, out out_len, plaintext, plaintext.length) != 1) {
+            warning ("EVP_EncryptUpdate failed");
+            return null;
+        }
+
+        if (ctx.encrypt_final (ciphertext[out_len:ciphertext.length], out final_len) != 1) {
+            warning ("EVP_EncryptFinal_ex failed");
+            return null;
+        }
+
+        int total_len = out_len + final_len;
+
+        // Trim to actual size
+        var result_ct = new uint8[total_len];
+        Memory.copy (result_ct, ciphertext, total_len);
+
+        // SHA-256 of ciphertext
+        var checksum = new Checksum (ChecksumType.SHA256);
+        checksum.update (result_ct, total_len);
+        var hash_hex = checksum.get_string ();
+
+        // Convert hex to raw bytes
+        var sha256 = new uint8[32];
+        for (int i = 0; i < 32; i++) {
+            sha256[i] = (uint8) uint64.parse (
+                hash_hex.substring (i * 2, 2), 16
+            );
+        }
+
+        var attachment = EncryptedAttachment ();
+        attachment.ciphertext = (owned) result_ct;
+        attachment.key = (owned) key;
+        attachment.iv = (owned) iv;
+        attachment.sha256 = (owned) sha256;
+        return attachment;
+    }
+
+    /**
+     * Encode raw bytes to unpadded base64 (standard alphabet).
+     */
+    public static string base64_encode_unpadded (uint8[] data) {
+        var encoded = Base64.encode (data);
+        // Strip trailing '=' padding
+        while (encoded.has_suffix ("=")) {
+            encoded = encoded.substring (0, encoded.length - 1);
+        }
+        return encoded;
+    }
+
+    /**
+     * Encode raw bytes to unpadded base64url (RFC 4648 §5).
+     *
+     * Matrix JWK keys use base64url encoding.
+     */
+    public static string base64url_encode_unpadded (uint8[] data) {
+        var encoded = base64_encode_unpadded (data);
+        // base64 → base64url: replace + with -, / with _
+        return encoded.replace ("+", "-").replace ("/", "_");
+    }
+
     /* ───── Private helpers ───── */
 
     private void extract_identity_keys () {

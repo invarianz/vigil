@@ -288,6 +288,170 @@ void test_room_key_content () {
     svc.cleanup ();
 }
 
+void test_encrypt_attachment_basic () {
+    clean_crypto_dir ();
+
+    var svc = new Vigil.Services.EncryptionService ();
+    svc.user_id = "@test:matrix.org";
+    svc.device_id = "TESTDEVICE";
+    svc.initialize ("test-pickle-key");
+
+    var plaintext = new uint8[256];
+    for (int i = 0; i < 256; i++) {
+        plaintext[i] = (uint8) (i & 0xFF);
+    }
+
+    var result = svc.encrypt_attachment (plaintext);
+    assert_true (result != null);
+
+    // Ciphertext should be same length as plaintext (CTR mode, no padding)
+    assert_true (result.ciphertext.length == plaintext.length);
+
+    // Key should be 32 bytes (256-bit AES)
+    assert_true (result.key.length == 32);
+
+    // IV should be 16 bytes
+    assert_true (result.iv.length == 16);
+
+    // Lower 8 bytes of IV should be zero (counter portion)
+    for (int i = 8; i < 16; i++) {
+        assert_true (result.iv[i] == 0);
+    }
+
+    // SHA-256 hash should be 32 bytes
+    assert_true (result.sha256.length == 32);
+
+    // Ciphertext should differ from plaintext
+    bool differs = false;
+    for (int i = 0; i < plaintext.length; i++) {
+        if (plaintext[i] != result.ciphertext[i]) {
+            differs = true;
+            break;
+        }
+    }
+    assert_true (differs);
+
+    svc.cleanup ();
+}
+
+void test_encrypt_attachment_different_keys_each_time () {
+    clean_crypto_dir ();
+
+    var svc = new Vigil.Services.EncryptionService ();
+    svc.user_id = "@test:matrix.org";
+    svc.device_id = "TESTDEVICE";
+    svc.initialize ("test-pickle-key");
+
+    var plaintext = "test data for encryption".data;
+
+    var result1 = svc.encrypt_attachment (plaintext);
+    var result2 = svc.encrypt_attachment (plaintext);
+
+    assert_true (result1 != null);
+    assert_true (result2 != null);
+
+    // Each encryption should use a different key
+    bool key_differs = false;
+    for (int i = 0; i < 32; i++) {
+        if (result1.key[i] != result2.key[i]) {
+            key_differs = true;
+            break;
+        }
+    }
+    assert_true (key_differs);
+
+    // Different key → different ciphertext
+    bool ct_differs = false;
+    for (int i = 0; i < result1.ciphertext.length; i++) {
+        if (result1.ciphertext[i] != result2.ciphertext[i]) {
+            ct_differs = true;
+            break;
+        }
+    }
+    assert_true (ct_differs);
+
+    svc.cleanup ();
+}
+
+void test_encrypt_attachment_sha256_correct () {
+    clean_crypto_dir ();
+
+    var svc = new Vigil.Services.EncryptionService ();
+    svc.user_id = "@test:matrix.org";
+    svc.device_id = "TESTDEVICE";
+    svc.initialize ("test-pickle-key");
+
+    var plaintext = "verify sha256 hash".data;
+    var result = svc.encrypt_attachment (plaintext);
+    assert_true (result != null);
+
+    // Recompute SHA-256 of ciphertext and compare
+    var checksum = new Checksum (ChecksumType.SHA256);
+    checksum.update (result.ciphertext, result.ciphertext.length);
+    var hash_hex = checksum.get_string ();
+
+    // Convert result.sha256 back to hex for comparison
+    var result_hex = new StringBuilder ();
+    for (int i = 0; i < result.sha256.length; i++) {
+        result_hex.append ("%02x".printf (result.sha256[i]));
+    }
+
+    assert_true (hash_hex == result_hex.str);
+
+    svc.cleanup ();
+}
+
+void test_encrypt_attachment_large_file () {
+    clean_crypto_dir ();
+
+    var svc = new Vigil.Services.EncryptionService ();
+    svc.user_id = "@test:matrix.org";
+    svc.device_id = "TESTDEVICE";
+    svc.initialize ("test-pickle-key");
+
+    // Simulate a ~2MB screenshot
+    var plaintext = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = (uint8) (i % 251); // prime modulus for variety
+    }
+
+    var result = svc.encrypt_attachment (plaintext);
+    assert_true (result != null);
+    assert_true (result.ciphertext.length == plaintext.length);
+
+    svc.cleanup ();
+}
+
+void test_base64url_encoding () {
+    // Test that base64url uses - and _ instead of + and /
+    // and strips padding
+    var data = new uint8[] { 0xFB, 0xFF, 0xFE };
+    var encoded = Vigil.Services.EncryptionService.base64url_encode_unpadded (data);
+
+    // Must not contain + / or =
+    assert_true (!encoded.contains ("+"));
+    assert_true (!encoded.contains ("/"));
+    assert_true (!encoded.contains ("="));
+
+    // Standard base64 of {0xFB, 0xFF, 0xFE} is "+//+"
+    // base64url should be "-__-"
+    assert_true (encoded == "-__-");
+}
+
+void test_base64_unpadded () {
+    // 1 byte → 2 base64 chars, normally "AA==" padded
+    var data = new uint8[] { 0x00 };
+    var encoded = Vigil.Services.EncryptionService.base64_encode_unpadded (data);
+    assert_true (!encoded.has_suffix ("="));
+    assert_true (encoded == "AA");
+
+    // 2 bytes → 3 base64 chars, normally "AAA=" padded
+    var data2 = new uint8[] { 0x00, 0x00 };
+    var encoded2 = Vigil.Services.EncryptionService.base64_encode_unpadded (data2);
+    assert_true (!encoded2.has_suffix ("="));
+    assert_true (encoded2 == "AAA");
+}
+
 void test_not_ready_before_init () {
     var svc = new Vigil.Services.EncryptionService ();
     assert_false (svc.is_ready);
@@ -354,6 +518,12 @@ public static int main (string[] args) {
     Test.add_func ("/encryption/room_key_content", test_room_key_content);
     Test.add_func ("/encryption/not_ready_before_init", test_not_ready_before_init);
     Test.add_func ("/encryption/megolm_session_restore", test_megolm_session_restore);
+    Test.add_func ("/encryption/encrypt_attachment_basic", test_encrypt_attachment_basic);
+    Test.add_func ("/encryption/encrypt_attachment_different_keys", test_encrypt_attachment_different_keys_each_time);
+    Test.add_func ("/encryption/encrypt_attachment_sha256", test_encrypt_attachment_sha256_correct);
+    Test.add_func ("/encryption/encrypt_attachment_large_file", test_encrypt_attachment_large_file);
+    Test.add_func ("/encryption/base64url_encoding", test_base64url_encoding);
+    Test.add_func ("/encryption/base64_unpadded", test_base64_unpadded);
 
     var result = Test.run ();
 
