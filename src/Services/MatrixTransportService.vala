@@ -32,8 +32,12 @@ public class Vigil.Services.MatrixTransportService : Object {
     public signal void screenshot_sent (string file_path, string event_id);
     public signal void screenshot_send_failed (string file_path, string error_message);
 
-    /** Matrix homeserver URL. */
-    public string homeserver_url { get; set; default = ""; }
+    /** Matrix homeserver URL (trailing slash stripped automatically). */
+    private string _homeserver_url = "";
+    public string homeserver_url {
+        get { return _homeserver_url; }
+        set { _homeserver_url = strip_trailing_slash (value); }
+    }
 
     /** Matrix access token for authentication. */
     public string access_token { get; set; default = ""; }
@@ -231,7 +235,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         try {
             var url = "%s/_matrix/client/v3/createRoom".printf (
-                strip_trailing_slash (homeserver_url)
+                homeserver_url
             );
 
             var builder = new Json.Builder ();
@@ -331,7 +335,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         try {
             var url = "%s/_matrix/client/v3/keys/upload".printf (
-                strip_trailing_slash (homeserver_url)
+                homeserver_url
             );
 
             var message = new Soup.Message ("POST", url);
@@ -375,7 +379,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         try {
             var url = "%s/_matrix/client/v3/keys/query".printf (
-                strip_trailing_slash (homeserver_url)
+                homeserver_url
             );
 
             var builder = new Json.Builder ();
@@ -433,7 +437,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         try {
             var url = "%s/_matrix/client/v3/keys/claim".printf (
-                strip_trailing_slash (homeserver_url)
+                homeserver_url
             );
 
             var builder = new Json.Builder ();
@@ -496,7 +500,7 @@ public class Vigil.Services.MatrixTransportService : Object {
         try {
             var txn_id = generate_txn_id ();
             var url = "%s/_matrix/client/v3/sendToDevice/%s/%s".printf (
-                strip_trailing_slash (homeserver_url),
+                homeserver_url,
                 event_type,
                 txn_id
             );
@@ -561,7 +565,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             var filename = Path.get_basename (file_path);
             var upload_url = "%s/_matrix/media/v3/upload?filename=%s".printf (
-                strip_trailing_slash (homeserver_url),
+                homeserver_url,
                 GLib.Uri.escape_string (filename, null, true)
             );
 
@@ -629,7 +633,7 @@ public class Vigil.Services.MatrixTransportService : Object {
             var encoded_room = GLib.Uri.escape_string (room_id, null, true);
 
             var url = "%s/_matrix/client/v3/rooms/%s/send/%s/%s".printf (
-                strip_trailing_slash (homeserver_url),
+                homeserver_url,
                 encoded_room,
                 actual_type,
                 txn_id
@@ -658,6 +662,10 @@ public class Vigil.Services.MatrixTransportService : Object {
             var root = parser.get_root ().get_object ();
 
             if (root.has_member ("event_id")) {
+                // Persist Megolm state after successful send
+                if (encryption != null) {
+                    encryption.save_session_if_needed ();
+                }
                 return root.get_string_member ("event_id");
             }
             return null;
@@ -761,7 +769,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         try {
             var url = "%s/_matrix/client/v3/account/whoami".printf (
-                strip_trailing_slash (homeserver_url)
+                homeserver_url
             );
 
             var message = new Soup.Message ("GET", url);

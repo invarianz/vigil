@@ -79,3 +79,16 @@ test('DBusServer', dbus_test_exe,
     timeout: 30,
     env: test_env,
 )
+
+# Performance benchmark (not run as part of normal test suite)
+benchmark_exe = executable(
+    'PerformanceBenchmark_test',
+    'PerformanceBenchmark.vala',
+    dependencies: [vigil_service_dep],
+    install: false,
+)
+
+benchmark('PerformanceBenchmark', benchmark_exe,
+    timeout: 120,
+    env: test_env,
+)

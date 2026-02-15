@@ -26,7 +26,11 @@ public class Vigil.Services.StorageService : Object {
     /** Directory where upload-pending metadata is stored. */
     public string pending_dir { get; private set; }
 
+    /** Cached count of pending screenshots. Use instead of scanning the directory. */
+    public int pending_count { get; private set; default = -1; }
+
     private string _base_dir;
+    private int _screenshot_file_count = -1;
 
     /**
      * Create a StorageService.
@@ -92,6 +96,10 @@ public class Vigil.Services.StorageService : Object {
             null,
             null
         );
+
+        if (pending_count >= 0) {
+            pending_count++;
+        }
     }
 
     /**
@@ -108,6 +116,20 @@ public class Vigil.Services.StorageService : Object {
             }
         } catch (Error e) {
             warning ("Failed to remove pending marker: %s", e.message);
+        }
+
+        // Delete the screenshot file -- it's been delivered, no need to keep it
+        try {
+            var screenshot_file = File.new_for_path (screenshot_path);
+            if (screenshot_file.query_exists ()) {
+                screenshot_file.delete ();
+            }
+        } catch (Error e) {
+            warning ("Failed to delete uploaded screenshot: %s", e.message);
+        }
+
+        if (pending_count > 0) {
+            pending_count--;
         }
     }
 
@@ -166,6 +188,8 @@ public class Vigil.Services.StorageService : Object {
             warning ("Error reading pending screenshots: %s", e.message);
         }
 
+        // Sync the cached count whenever a full scan is performed
+        pending_count = (int) pending.length;
         return pending;
     }
 
@@ -178,6 +202,11 @@ public class Vigil.Services.StorageService : Object {
      */
     public int cleanup_old_screenshots () {
         int deleted = 0;
+
+        // Fast path: if we know the count is below the limit, skip the expensive scan
+        if (_screenshot_file_count >= 0 && _screenshot_file_count <= max_local_screenshots) {
+            return 0;
+        }
 
         try {
             var dir = File.new_for_path (screenshots_dir);
@@ -205,6 +234,13 @@ public class Vigil.Services.StorageService : Object {
                 item.path = file_path;
                 item.modified = info.get_modification_date_time ();
                 screenshot_files.add (item);
+            }
+
+            _screenshot_file_count = (int) screenshot_files.length;
+
+            // If we're within the limit, no work to do
+            if (_screenshot_file_count <= max_local_screenshots) {
+                return 0;
             }
 
             // Sort by modification time, oldest first
@@ -235,6 +271,9 @@ public class Vigil.Services.StorageService : Object {
             warning ("Cleanup error: %s", e.message);
         }
 
+        if (_screenshot_file_count >= 0) {
+            _screenshot_file_count -= deleted;
+        }
         return deleted;
     }
 }

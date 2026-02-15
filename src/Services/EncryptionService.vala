@@ -56,6 +56,12 @@ public class Vigil.Services.EncryptionService : Object {
     /* Crypto state storage directory */
     private string _crypto_dir;
 
+    /* Cached /dev/urandom stream for fast random generation */
+    private DataInputStream? _urandom_stream;
+
+    /* Whether the Megolm session state needs to be persisted */
+    private bool _group_session_dirty = false;
+
     private const int ONE_TIME_KEY_COUNT = 50;
 
     construct {
@@ -319,9 +325,7 @@ public class Vigil.Services.EncryptionService : Object {
             return null;
         }
 
-        // Save session after each encryption (message index advances)
-        save_group_session ();
-
+        _group_session_dirty = true;
         return ((string) ct_buf).substring (0, (long) result);
     }
 
@@ -577,7 +581,24 @@ public class Vigil.Services.EncryptionService : Object {
             Olm.clear_outbound_group_session (_group_session);
             _group_session = null;
         }
+        if (_urandom_stream != null) {
+            try { _urandom_stream.close (null); } catch (Error e) {}
+            _urandom_stream = null;
+        }
         is_ready = false;
+    }
+
+    /**
+     * Persist the Megolm session state to disk if it has changed.
+     *
+     * Call this after a successful send rather than on every encrypt,
+     * to avoid a disk write on the hot path.
+     */
+    public void save_session_if_needed () {
+        if (_group_session_dirty && _group_session != null) {
+            save_group_session ();
+            _group_session_dirty = false;
+        }
     }
 
     /* ───── Private helpers ───── */
@@ -724,17 +745,18 @@ public class Vigil.Services.EncryptionService : Object {
     }
 
     /**
-     * Generate cryptographic random bytes using /dev/urandom.
+     * Generate cryptographic random bytes using a cached /dev/urandom fd.
      */
     private uint8[] generate_random (size_t length) {
         var buf = new uint8[length];
 
         try {
-            var file = File.new_for_path ("/dev/urandom");
-            var stream = file.read (null);
+            if (_urandom_stream == null) {
+                var file = File.new_for_path ("/dev/urandom");
+                _urandom_stream = new DataInputStream (file.read (null));
+            }
             size_t bytes_read;
-            stream.read_all (buf, out bytes_read, null);
-            stream.close (null);
+            _urandom_stream.read_all (buf, out bytes_read, null);
         } catch (Error e) {
             // Fallback to GLib random
             warning ("Failed to read /dev/urandom, using GLib.Random: %s", e.message);

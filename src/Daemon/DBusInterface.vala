@@ -396,6 +396,11 @@ public class Vigil.Daemon.DBusServer : Object {
     }
 
     private void refresh_pending_count () {
-        _cached_pending_count = (int) _storage_svc.get_pending_screenshots ().length;
+        // Use the cached count if available (O(1)), fall back to full scan
+        if (_storage_svc.pending_count >= 0) {
+            _cached_pending_count = _storage_svc.pending_count;
+        } else {
+            _cached_pending_count = (int) _storage_svc.get_pending_screenshots ().length;
+        }
     }
 }
