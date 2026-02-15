@@ -91,7 +91,7 @@ void test_send_heartbeat_returns_false_without_matrix () {
 
 void test_default_interval () {
     var svc = new Vigil.Services.HeartbeatService ();
-    assert_true (svc.interval_seconds == 60);
+    assert_true (svc.interval_seconds == 900);
 }
 
 void test_report_tamper_event () {

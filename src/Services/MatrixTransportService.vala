@@ -882,11 +882,41 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
-     * Send a tamper alert message to the Matrix room.
+     * Send a tamper alert to the Matrix room with HTML formatting.
+     *
+     * Tamper alerts use bold + blockquote so they stand out visually
+     * in Element and other Matrix clients, clearly distinguishable
+     * from regular heartbeat/status messages.
      */
     public async bool send_alert (string event_type, string details) {
-        var text = "ALERT [%s]: %s".printf (event_type, details);
-        return yield send_text_message (text);
+        if (!is_configured) {
+            return false;
+        }
+
+        var plain = "TAMPER ALERT [%s]: %s".printf (event_type, details);
+        var html = "<strong>TAMPER ALERT [%s]</strong><br><blockquote>%s</blockquote>".printf (
+            Markup.escape_text (event_type),
+            Markup.escape_text (details)
+        );
+
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("msgtype");
+        builder.add_string_value ("m.text");
+        builder.set_member_name ("body");
+        builder.add_string_value (plain);
+        builder.set_member_name ("format");
+        builder.add_string_value ("org.matrix.custom.html");
+        builder.set_member_name ("formatted_body");
+        builder.add_string_value (html);
+        builder.end_object ();
+
+        var gen = new Json.Generator ();
+        gen.set_root (builder.get_root ());
+        var content_json = gen.to_data (null);
+
+        var event_id = yield send_room_event ("m.room.message", content_json);
+        return event_id != null;
     }
 
     /**

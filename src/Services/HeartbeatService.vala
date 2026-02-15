@@ -31,7 +31,7 @@ public class Vigil.Services.HeartbeatService : Object {
     public signal void heartbeat_failed (string error_message);
 
     /** Heartbeat interval in seconds. */
-    public int interval_seconds { get; set; default = 60; }
+    public int interval_seconds { get; set; default = 900; }
 
     /** Whether the heartbeat loop is running. */
     public bool is_running { get; private set; default = false; }
@@ -138,7 +138,7 @@ public class Vigil.Services.HeartbeatService : Object {
         var hours = uptime / 3600;
         var minutes = (uptime % 3600) / 60;
 
-        var message = "Vigil going offline (clean shutdown) | uptime was: %lldh %lldm | pending: %d".printf (
+        var message = "STATUS: Vigil going offline (clean shutdown, this is normal) | uptime was: %lldh %lldm | pending: %d".printf (
             hours, minutes, pending_upload_count
         );
 
@@ -178,7 +178,7 @@ public class Vigil.Services.HeartbeatService : Object {
             // If elapsed is more than 2x the interval, there was a gap
             if (elapsed_sec > expected_sec * 2) {
                 var gap_min = elapsed_sec / 60;
-                sb.append (" | resumed after %lldm gap (sleep/network)".printf (gap_min));
+                sb.append (" | resumed after %lldm gap (device was asleep or offline, this is normal)".printf (gap_min));
             }
         }
 

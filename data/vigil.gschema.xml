@@ -81,8 +81,14 @@
 
     <!-- Heartbeat -->
     <key name="heartbeat-interval-seconds" type="i">
-      <default>60</default>
+      <default>900</default>
       <summary>Interval between heartbeat pings in seconds</summary>
+    </key>
+
+    <!-- Upload batching -->
+    <key name="upload-batch-interval-seconds" type="i">
+      <default>600</default>
+      <summary>How often to send accumulated screenshots to the partner (seconds)</summary>
     </key>
 
     <!-- Tamper detection -->

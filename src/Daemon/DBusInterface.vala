@@ -58,6 +58,8 @@ public class Vigil.Daemon.DBusServer : Object {
 
     private GenericArray<string> _recent_tamper_events;
     private int _cached_pending_count = 0;
+    private uint _batch_upload_source = 0;
+    private int _batch_upload_interval = 600;
 
     /* D-Bus properties */
 
@@ -213,8 +215,10 @@ public class Vigil.Daemon.DBusServer : Object {
         // Update cached pending count
         refresh_pending_count ();
 
-        // Retry pending uploads
-        yield retry_pending_uploads ();
+        // Start batch upload timer
+        _batch_upload_interval = _settings.get_int ("upload-batch-interval-seconds");
+        yield flush_pending_uploads ();
+        schedule_batch_upload ();
     }
 
     private void start_monitoring () {
@@ -282,6 +286,8 @@ public class Vigil.Daemon.DBusServer : Object {
         _scheduler_svc.min_interval_seconds = _settings.get_int ("min-interval-seconds");
         _scheduler_svc.max_interval_seconds = _settings.get_int ("max-interval-seconds");
         _storage_svc.max_local_screenshots = _settings.get_int ("max-local-screenshots");
+        _heartbeat_svc.interval_seconds = _settings.get_int ("heartbeat-interval-seconds");
+        _batch_upload_interval = _settings.get_int ("upload-batch-interval-seconds");
 
         // Matrix transport settings
         _matrix_svc.homeserver_url = _settings.get_string ("matrix-homeserver-url");
@@ -358,22 +364,23 @@ public class Vigil.Daemon.DBusServer : Object {
                 warning ("Failed to mark screenshot as pending: %s", e.message);
             }
 
-            var now = new DateTime.now_local ();
-
-            if (_matrix_svc.is_configured) {
-                bool delivered = yield _matrix_svc.send_screenshot (path, now);
-                if (delivered) {
-                    _storage_svc.mark_uploaded (path);
-                    refresh_pending_count ();
-                    status_changed ();
-                }
-            }
-
+            refresh_pending_count ();
+            status_changed ();
             _storage_svc.cleanup_old_screenshots ();
         }
     }
 
-    private async void retry_pending_uploads () {
+    private void schedule_batch_upload () {
+        _batch_upload_source = Timeout.add_seconds ((uint) _batch_upload_interval, () => {
+            _batch_upload_source = 0;
+            flush_pending_uploads.begin ();
+
+            schedule_batch_upload ();
+            return Source.REMOVE;
+        });
+    }
+
+    private async void flush_pending_uploads () {
         var pending = _storage_svc.get_pending_screenshots ();
         if (pending.length == 0) {
             return;

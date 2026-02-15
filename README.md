@@ -138,11 +138,15 @@ Once setup completes, enable monitoring from the Status tab.
 
 Your partner opens Element and accepts the room invite. They will see:
 
-- **Screenshots**: appear as images with timestamps
-- **Heartbeats**: periodic status messages like `Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0 | next check-in by: 14:35`
-- **Tamper alerts**: `ALERT [autostart_missing]: Autostart desktop entry is missing`
+- **Screenshots**: batches of images sent every 10 minutes (captured every 30s--2min, delivered in batches to avoid flooding)
+- **Heartbeats**: periodic status messages every 15 minutes: `Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0 | next check-in by: 14:35`
+- **TAMPER ALERT**: bold, formatted alerts that stand out: **TAMPER ALERT [autostart_missing]** -- clearly different from routine messages
+- **STATUS messages**: informational notices like `STATUS: Vigil going offline (clean shutdown, this is normal)` or `resumed after 45m gap (device was asleep or offline, this is normal)`
 
-Each heartbeat includes a **"next check-in by"** time. If that time passes without a new message, something is wrong -- no technical knowledge required. This covers kill, uninstall, and every other "make it stop" attack.
+Your partner only needs to understand three things:
+1. **Regular messages** = everything is fine
+2. **"TAMPER ALERT"** (bold) = something suspicious happened, investigate
+3. **"next check-in by" deadline passes** with no new message = something is wrong (covers kill, uninstall, etc.)
 
 ### Step 4: Lock it down
 
@@ -178,7 +182,8 @@ All settings are stored via GSettings (`io.github.invarianz.vigil`):
 | `max-local-screenshots` | Screenshots to keep locally | 100 |
 | `monitoring-enabled` | Whether monitoring is active | false |
 | `autostart-enabled` | Start at login | false |
-| `heartbeat-interval-seconds` | Heartbeat ping interval | 60 (1 min) |
+| `heartbeat-interval-seconds` | Heartbeat ping interval | 900 (15 min) |
+| `upload-batch-interval-seconds` | How often to send screenshots to partner | 600 (10 min) |
 | `tamper-check-interval-seconds` | Tamper check interval | 120 (2 min) |
 
 ## License
