@@ -28,11 +28,21 @@ public class Vigil.Services.StorageService : Object {
 
     private string _base_dir;
 
-    construct {
-        _base_dir = Path.build_filename (
-            Environment.get_user_data_dir (),
-            "io.github.invarianz.vigil"
-        );
+    /**
+     * Create a StorageService.
+     *
+     * @param base_dir Optional base directory override. If null, uses
+     *                 the XDG data directory. Pass explicitly for testing.
+     */
+    public StorageService (string? base_dir = null) {
+        if (base_dir != null) {
+            _base_dir = base_dir;
+        } else {
+            _base_dir = Path.build_filename (
+                Environment.get_user_data_dir (),
+                "io.github.invarianz.vigil"
+            );
+        }
         screenshots_dir = Path.build_filename (_base_dir, "screenshots");
         pending_dir = Path.build_filename (_base_dir, "pending");
     }

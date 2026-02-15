@@ -83,8 +83,15 @@ public class Vigil.Services.UploadService : Object {
                 bytes
             );
 
-            var message = Soup.Form.request_new_from_multipart (endpoint_url, multipart);
-            message.method = "POST";
+            var message = new Soup.Message ("POST", endpoint_url);
+
+            // Convert multipart to request headers + body
+            Bytes body;
+            multipart.to_message (message.get_request_headers (), out body);
+            message.set_request_body_from_bytes (
+                message.get_request_headers ().get_content_type (null),
+                body
+            );
 
             if (api_token != "") {
                 message.get_request_headers ().append ("Authorization", "Bearer %s".printf (api_token));

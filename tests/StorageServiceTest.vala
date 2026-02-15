@@ -7,23 +7,21 @@
  * Unit tests for the StorageService.
  *
  * Uses a temporary directory to isolate test file operations
- * from any real user data.
+ * from any real user data. Passes the base_dir explicitly to
+ * StorageService to avoid GLib's cached XDG_DATA_HOME.
  */
 
-string test_dir;
+string test_base_dir;
 
 void setup_test_dir () {
-    test_dir = Path.build_filename (
+    test_base_dir = Path.build_filename (
         Environment.get_tmp_dir (),
         "vigil-test-%s".printf (GLib.Uuid.string_random ().substring (0, 8))
     );
-    // Override XDG_DATA_HOME so StorageService uses our temp dir
-    Environment.set_variable ("XDG_DATA_HOME", test_dir, true);
 }
 
 void teardown_test_dir () {
-    // Clean up test directory recursively
-    delete_directory_recursive (test_dir);
+    delete_directory_recursive (test_base_dir);
 }
 
 void delete_directory_recursive (string path) {
@@ -44,10 +42,14 @@ void delete_directory_recursive (string path) {
     }
 }
 
+Vigil.Services.StorageService create_test_service () {
+    return new Vigil.Services.StorageService (test_base_dir);
+}
+
 void test_storage_initialize_creates_dirs () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
     try {
         service.initialize ();
     } catch (Error e) {
@@ -63,15 +65,12 @@ void test_storage_initialize_creates_dirs () {
 void test_storage_generate_screenshot_path () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
 
     var path = service.generate_screenshot_path ();
 
-    // Should be in the screenshots directory
     assert_true (path.has_prefix (service.screenshots_dir));
-    // Should end with .png
     assert_true (path.has_suffix (".png"));
-    // Should contain "vigil_"
     assert_true (Path.get_basename (path).has_prefix ("vigil_"));
 
     teardown_test_dir ();
@@ -80,12 +79,11 @@ void test_storage_generate_screenshot_path () {
 void test_storage_generate_unique_paths () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
 
     var path1 = service.generate_screenshot_path ();
     var path2 = service.generate_screenshot_path ();
 
-    // Paths should be different (random suffix)
     assert_true (path1 != path2);
 
     teardown_test_dir ();
@@ -94,7 +92,7 @@ void test_storage_generate_unique_paths () {
 void test_storage_mark_pending_creates_marker () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
     try {
         service.initialize ();
     } catch (Error e) {
@@ -112,7 +110,6 @@ void test_storage_mark_pending_creates_marker () {
     var marker_path = Path.build_filename (service.pending_dir, "test.png.pending");
     assert_true (FileUtils.test (marker_path, FileTest.EXISTS));
 
-    // Marker should contain the screenshot path
     try {
         uint8[] contents;
         File.new_for_path (marker_path).load_contents (null, out contents, null);
@@ -128,7 +125,7 @@ void test_storage_mark_pending_creates_marker () {
 void test_storage_mark_uploaded_removes_marker () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
     try {
         service.initialize ();
     } catch (Error e) {
@@ -154,14 +151,13 @@ void test_storage_mark_uploaded_removes_marker () {
 void test_storage_get_pending_screenshots () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
     try {
         service.initialize ();
     } catch (Error e) {
         assert_not_reached ();
     }
 
-    // Create some fake screenshot files
     var path1 = Path.build_filename (service.screenshots_dir, "shot1.png");
     var path2 = Path.build_filename (service.screenshots_dir, "shot2.png");
 
@@ -183,7 +179,7 @@ void test_storage_get_pending_screenshots () {
 void test_storage_get_pending_ignores_missing_files () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
     try {
         service.initialize ();
     } catch (Error e) {
@@ -198,7 +194,6 @@ void test_storage_get_pending_ignores_missing_files () {
         assert_not_reached ();
     }
 
-    // Should return empty because the screenshot file doesn't exist
     var pending = service.get_pending_screenshots ();
     assert_true (pending.length == 0);
 
@@ -208,7 +203,7 @@ void test_storage_get_pending_ignores_missing_files () {
 void test_storage_cleanup_respects_max () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
     service.max_local_screenshots = 3;
     try {
         service.initialize ();
@@ -216,7 +211,6 @@ void test_storage_cleanup_respects_max () {
         assert_not_reached ();
     }
 
-    // Create 5 screenshot files (all uploaded, no pending markers)
     for (int i = 0; i < 5; i++) {
         var path = Path.build_filename (service.screenshots_dir, "shot_%d.png".printf (i));
         try {
@@ -227,7 +221,7 @@ void test_storage_cleanup_respects_max () {
     }
 
     int deleted = service.cleanup_old_screenshots ();
-    assert_true (deleted == 2); // 5 - 3 = 2
+    assert_true (deleted == 2);
 
     teardown_test_dir ();
 }
@@ -235,7 +229,7 @@ void test_storage_cleanup_respects_max () {
 void test_storage_cleanup_preserves_pending () {
     setup_test_dir ();
 
-    var service = new Vigil.Services.StorageService ();
+    var service = create_test_service ();
     service.max_local_screenshots = 1;
     try {
         service.initialize ();
@@ -243,7 +237,6 @@ void test_storage_cleanup_preserves_pending () {
         assert_not_reached ();
     }
 
-    // Create 3 files, all pending upload
     for (int i = 0; i < 3; i++) {
         var path = Path.build_filename (service.screenshots_dir, "pending_%d.png".printf (i));
         try {
@@ -255,7 +248,6 @@ void test_storage_cleanup_preserves_pending () {
     }
 
     int deleted = service.cleanup_old_screenshots ();
-    // Should not delete any because all are pending
     assert_true (deleted == 0);
 
     teardown_test_dir ();

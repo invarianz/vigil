@@ -2,7 +2,7 @@ project(
     'io.github.invarianz.vigil',
     'vala', 'c',
     version: '1.0.0',
-    meson_version: '>= 0.57.0',
+    meson_version: '>= 0.59.0',
     default_options: ['warning_level=2']
 )
 
@@ -43,21 +43,6 @@ config_file = configure_file(
     configuration: conf_data
 )
 
-# Source files shared between application and tests (no main entry point)
-src_files = files(
-    'src' / 'MainWindow.vala',
-    'src' / 'Services' / 'IScreenshotBackend.vala',
-    'src' / 'Services' / 'PortalScreenshotBackend.vala',
-    'src' / 'Services' / 'GalaScreenshotBackend.vala',
-    'src' / 'Services' / 'ScreenshotService.vala',
-    'src' / 'Services' / 'SchedulerService.vala',
-    'src' / 'Services' / 'UploadService.vala',
-    'src' / 'Services' / 'StorageService.vala',
-    'src' / 'Widgets' / 'StatusView.vala',
-    'src' / 'Widgets' / 'SettingsView.vala',
-    'src' / 'Utils' / 'SessionDetector.vala',
-)
-
 all_dependencies = [
     glib_dep,
     gobject_dep,
@@ -70,13 +55,60 @@ all_dependencies = [
     portal_gtk4_dep,
 ]
 
+# Service/logic sources shared between the app and tests (no GTK UI, no main)
+service_src_files = files(
+    'src' / 'Services' / 'IScreenshotBackend.vala',
+    'src' / 'Services' / 'PortalScreenshotBackend.vala',
+    'src' / 'Services' / 'GalaScreenshotBackend.vala',
+    'src' / 'Services' / 'ScreenshotService.vala',
+    'src' / 'Services' / 'SchedulerService.vala',
+    'src' / 'Services' / 'UploadService.vala',
+    'src' / 'Services' / 'StorageService.vala',
+    'src' / 'Utils' / 'SessionDetector.vala',
+)
+
+# Dependencies for service layer (no GTK/Granite needed)
+service_deps = [
+    glib_dep,
+    gobject_dep,
+    gio_dep,
+    json_dep,
+    soup_dep,
+    portal_dep,
+]
+
+# Build the service layer as a static library so it can be shared
+# between the main app and tests without duplicate compilation
+vigil_service_lib = static_library(
+    'vigil-services',
+    service_src_files,
+    dependencies: service_deps,
+    install: false,
+)
+
+vigil_service_dep = declare_dependency(
+    link_with: vigil_service_lib,
+    dependencies: service_deps,
+    include_directories: [
+        vigil_service_lib.private_dir_include(),
+        include_directories('.'),
+    ],
+)
+
+# UI source files (need GTK/Granite)
+ui_src_files = files(
+    'src' / 'MainWindow.vala',
+    'src' / 'Widgets' / 'StatusView.vala',
+    'src' / 'Widgets' / 'SettingsView.vala',
+)
+
 # Build the application executable
 executable(
     app_id,
-    src_files,
+    ui_src_files,
     config_file,
     'src' / 'Application.vala',
-    dependencies: all_dependencies,
+    dependencies: all_dependencies + [vigil_service_dep],
     install: true
 )
 

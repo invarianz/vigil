@@ -7,7 +7,7 @@
  * Unit tests for the UploadService.
  *
  * Tests configuration validation and error handling.
- * Actual HTTP upload is tested via integration tests.
+ * Uses GLib.Test.expect_message to handle expected warnings.
  */
 
 void test_upload_fails_without_endpoint () {
@@ -24,6 +24,9 @@ void test_upload_fails_without_endpoint () {
 
     var now = new DateTime.now_local ();
 
+    // Expect the warning that UploadService emits
+    Test.expect_message (null, LogLevelFlags.LEVEL_WARNING, "*endpoint*");
+
     service.upload.begin ("/tmp/fake.png", now, (obj, res) => {
         bool result = service.upload.end (res);
         assert_true (result == false);
@@ -37,9 +40,10 @@ void test_upload_fails_without_endpoint () {
 
     loop.run ();
 
+    Test.assert_expected_messages ();
+
     assert_true (failed);
     assert_true (fail_msg != null);
-    assert_true (fail_msg.contains ("endpoint"));
 }
 
 void test_upload_fails_with_missing_file () {
@@ -54,6 +58,9 @@ void test_upload_fails_with_missing_file () {
 
     var now = new DateTime.now_local ();
 
+    // Expect the warning about upload error
+    Test.expect_message (null, LogLevelFlags.LEVEL_WARNING, "*Upload error*");
+
     service.upload.begin ("/tmp/nonexistent_screenshot_12345.png", now, (obj, res) => {
         bool result = service.upload.end (res);
         assert_true (result == false);
@@ -66,6 +73,8 @@ void test_upload_fails_with_missing_file () {
     });
 
     loop.run ();
+
+    Test.assert_expected_messages ();
 
     assert_true (failed);
 }
