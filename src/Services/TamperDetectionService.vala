@@ -187,18 +187,20 @@ public class Vigil.Services.TamperDetectionService : Object {
                 "Monitoring has been disabled via settings");
         }
 
-        // Check if intervals have been set absurdly high (> 1 hour)
+        // Check if intervals have been set too high (> 5 minutes)
+        // The absolute maximum gap between screenshots should be 2 minutes,
+        // so anything above 5 minutes is clearly tampered.
         int min_interval = _settings.get_int ("min-interval-seconds");
         int max_interval = _settings.get_int ("max-interval-seconds");
 
-        if (min_interval > 3600) {
+        if (min_interval > 300) {
             emit_tamper ("interval_tampered",
-                "Minimum interval set to %d seconds (> 1 hour)".printf (min_interval));
+                "Minimum interval set to %d seconds (> 5 minutes)".printf (min_interval));
         }
 
-        if (max_interval > 7200) {
+        if (max_interval > 300) {
             emit_tamper ("interval_tampered",
-                "Maximum interval set to %d seconds (> 2 hours)".printf (max_interval));
+                "Maximum interval set to %d seconds (> 5 minutes)".printf (max_interval));
         }
 
         // Check if Matrix transport was cleared

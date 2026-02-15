@@ -139,26 +139,24 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         // --- Advanced section (collapsed) ---
         var advanced_header = new Granite.HeaderLabel ("Advanced");
 
-        var min_label = new Gtk.Label ("Minimum interval (minutes)") {
+        var min_label = new Gtk.Label ("Minimum interval (seconds)") {
             halign = Gtk.Align.START,
             hexpand = true
         };
-        min_interval_spin = new Gtk.SpinButton.with_range (1, 60, 1);
-        var min_seconds = settings.get_int ("min-interval-seconds");
-        min_interval_spin.value = min_seconds / 60.0;
+        min_interval_spin = new Gtk.SpinButton.with_range (10, 120, 5);
+        min_interval_spin.value = settings.get_int ("min-interval-seconds");
         min_interval_spin.value_changed.connect (() => {
-            settings.set_int ("min-interval-seconds", (int) (min_interval_spin.value * 60));
+            settings.set_int ("min-interval-seconds", (int) min_interval_spin.value);
         });
 
-        var max_label = new Gtk.Label ("Maximum interval (minutes)") {
+        var max_label = new Gtk.Label ("Maximum interval (seconds)") {
             halign = Gtk.Align.START,
             hexpand = true
         };
-        max_interval_spin = new Gtk.SpinButton.with_range (1, 120, 1);
-        var max_seconds = settings.get_int ("max-interval-seconds");
-        max_interval_spin.value = max_seconds / 60.0;
+        max_interval_spin = new Gtk.SpinButton.with_range (30, 120, 5);
+        max_interval_spin.value = settings.get_int ("max-interval-seconds");
         max_interval_spin.value_changed.connect (() => {
-            settings.set_int ("max-interval-seconds", (int) (max_interval_spin.value * 60));
+            settings.set_int ("max-interval-seconds", (int) max_interval_spin.value);
         });
 
         var retention_label = new Gtk.Label ("Maximum local screenshots") {

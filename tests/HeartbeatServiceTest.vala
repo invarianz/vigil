@@ -20,6 +20,7 @@ void test_build_heartbeat_message_basic () {
     assert_true (msg.contains ("Vigil active"));
     assert_true (msg.contains ("screenshots: 5"));
     assert_true (msg.contains ("pending: 2"));
+    assert_true (msg.contains ("next check-in by:"));
 }
 
 void test_build_heartbeat_message_with_tamper_events () {

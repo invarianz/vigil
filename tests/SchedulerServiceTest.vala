@@ -14,8 +14,8 @@ void test_scheduler_default_state () {
     assert_true (scheduler.is_running == false);
     assert_true (scheduler.last_capture_time == null);
     assert_true (scheduler.next_capture_time == null);
-    assert_true (scheduler.min_interval_seconds == 120);
-    assert_true (scheduler.max_interval_seconds == 600);
+    assert_true (scheduler.min_interval_seconds == 30);
+    assert_true (scheduler.max_interval_seconds == 120);
 }
 
 void test_scheduler_random_interval_within_range () {

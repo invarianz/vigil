@@ -6,7 +6,7 @@ vigil takes screenshots of your screen at random intervals and sends them to you
 
 ## Features
 
-- Random-interval screenshots that cannot be predicted
+- Random-interval screenshots (30s--2min by default) that cannot be predicted
 - Dual backend: XDG Desktop Portal (Wayland) and Gala D-Bus (X11)
 - **Native E2EE**: built-in Olm/Megolm encryption via libolm -- no external proxy needed
 - **Encrypted attachments**: screenshots are AES-256-CTR encrypted before upload per the Matrix spec -- the homeserver never sees plaintext images
@@ -14,7 +14,7 @@ vigil takes screenshots of your screen at random intervals and sends them to you
 - **Matrix transport**: sends screenshots to a private encrypted chat room -- no third-party server sees your data
 - Queues screenshots for delivery when offline, retries on startup
 - Tamper detection: alerts your partner if the daemon is stopped, autostart is removed, settings are changed, E2EE is disabled, or the binary is modified
-- Heartbeat dead man's switch: silence = alert
+- Heartbeat dead man's switch with explicit "next check-in by" deadline -- partner sees a concrete time, no technical knowledge needed
 - Systemd user service with watchdog and restart-on-kill
 - Follows elementary OS Human Interface Guidelines
 - Built with GTK 4 and Granite 7
@@ -139,10 +139,10 @@ Once setup completes, enable monitoring from the Status tab.
 Your partner opens Element and accepts the room invite. They will see:
 
 - **Screenshots**: appear as images with timestamps
-- **Heartbeats**: periodic status messages like `Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0`
+- **Heartbeats**: periodic status messages like `Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0 | next check-in by: 14:35`
 - **Tamper alerts**: `ALERT [autostart_missing]: Autostart desktop entry is missing`
 
-If vigil goes completely silent (killed, uninstalled), the **absence of heartbeats** is itself the alert.
+Each heartbeat includes a **"next check-in by"** time. If that time passes without a new message, something is wrong -- no technical knowledge required. This covers kill, uninstall, and every other "make it stop" attack.
 
 ### Step 4: Lock it down
 
@@ -173,8 +173,8 @@ All settings are stored via GSettings (`io.github.invarianz.vigil`):
 | `partner-matrix-id` | Partner's Matrix user ID | (empty) |
 | `device-id` | Matrix device ID (set during login) | (empty) |
 | `e2ee-pickle-key` | E2EE password for encrypting crypto state | (empty) |
-| `min-interval-seconds` | Minimum time between screenshots | 120 (2 min) |
-| `max-interval-seconds` | Maximum time between screenshots | 600 (10 min) |
+| `min-interval-seconds` | Minimum time between screenshots | 30 (30 sec) |
+| `max-interval-seconds` | Maximum time between screenshots | 120 (2 min) |
 | `max-local-screenshots` | Screenshots to keep locally | 100 |
 | `monitoring-enabled` | Whether monitoring is active | false |
 | `autostart-enabled` | Start at login | false |

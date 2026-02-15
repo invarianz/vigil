@@ -187,6 +187,12 @@ public class Vigil.Services.HeartbeatService : Object {
             sb.append (" | recovering: %d heartbeats were missed".printf (consecutive_failures));
         }
 
+        // Tell the partner when to expect the next check-in.
+        // If this deadline passes without a new message, something is wrong.
+        // Use 2x interval to allow for timing jitter and network delays.
+        var deadline = new DateTime.now_local ().add_seconds (interval_seconds * 2);
+        sb.append (" | next check-in by: %s".printf (deadline.format ("%H:%M")));
+
         if (_tamper_events.length > 0) {
             sb.append ("\nTamper events:");
             for (int i = 0; i < _tamper_events.length; i++) {

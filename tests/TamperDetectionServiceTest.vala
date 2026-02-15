@@ -141,7 +141,7 @@ void test_config_hash_changes_on_setting_change () {
     assert_true (hash_before != hash_after);
 
     // Reset
-    settings.set_int ("min-interval-seconds", 120);
+    settings.set_int ("min-interval-seconds", 30);
 }
 
 void test_settings_sanity_monitoring_disabled () {
@@ -168,7 +168,7 @@ void test_settings_sanity_monitoring_disabled () {
 void test_settings_sanity_interval_tampered () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
-    settings.set_int ("min-interval-seconds", 7200);
+    settings.set_int ("min-interval-seconds", 600);
     // Set Matrix settings so matrix_cleared doesn't also fire
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
@@ -187,14 +187,14 @@ void test_settings_sanity_interval_tampered () {
     assert_true (first_event == "interval_tampered");
 
     // Reset
-    settings.set_int ("min-interval-seconds", 120);
+    settings.set_int ("min-interval-seconds", 30);
 }
 
 void test_settings_sanity_matrix_cleared () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
-    settings.set_int ("min-interval-seconds", 120);
-    settings.set_int ("max-interval-seconds", 600);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
     settings.set_string ("matrix-homeserver-url", "");
     settings.set_string ("matrix-access-token", "");
     settings.set_string ("matrix-room-id", "");
@@ -213,8 +213,8 @@ void test_settings_sanity_matrix_cleared () {
 void test_settings_sanity_matrix_incomplete () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
-    settings.set_int ("min-interval-seconds", 120);
-    settings.set_int ("max-interval-seconds", 600);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "");
     settings.set_string ("matrix-room-id", "!room:test");

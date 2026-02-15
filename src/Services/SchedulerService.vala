@@ -16,10 +16,10 @@ public class Vigil.Services.SchedulerService : Object {
     public signal void scheduler_stopped ();
 
     /** Minimum interval between screenshots in seconds. */
-    public int min_interval_seconds { get; set; default = 120; }
+    public int min_interval_seconds { get; set; default = 30; }
 
     /** Maximum interval between screenshots in seconds. */
-    public int max_interval_seconds { get; set; default = 600; }
+    public int max_interval_seconds { get; set; default = 120; }
 
     /** Whether the scheduler is currently running. */
     public bool is_running { get; private set; default = false; }
