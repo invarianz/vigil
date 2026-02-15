@@ -6,9 +6,12 @@
 /**
  * Periodically checks system integrity and reports anomalies.
  *
- * Detected events are reported to HeartbeatService for inclusion
- * in the next heartbeat payload, so the server/accountability partner
- * is informed even when the user is actively tampering.
+ * Detected events are reported via the tamper_detected signal. The daemon
+ * forwards these to the Matrix room so the accountability partner is
+ * informed immediately, even when the user is actively tampering.
+ *
+ * In addition to periodic checks, this service monitors GSettings
+ * reactively -- any change to a critical key triggers an immediate check.
  */
 public class Vigil.Services.TamperDetectionService : Object {
 
@@ -40,6 +43,10 @@ public class Vigil.Services.TamperDetectionService : Object {
      */
     public TamperDetectionService (GLib.Settings? settings = null) {
         _settings = settings;
+
+        if (_settings != null) {
+            connect_settings_signals ();
+        }
     }
 
     construct {
@@ -88,22 +95,22 @@ public class Vigil.Services.TamperDetectionService : Object {
         check_autostart_entry ();
         check_systemd_service ();
         check_settings_sanity ();
-        check_screenshot_permission ();
         check_binary_integrity ();
     }
 
     /**
      * Compute a SHA256 hash of current GSettings values that matter.
-     * Used by HeartbeatService to detect config changes server-side.
+     * Used to detect config changes between heartbeats.
      */
     public string compute_config_hash () {
         if (_settings == null) {
             return "no-settings";
         }
 
-        var data = "%s|%s|%d|%d|%d|%b".printf (
-            _settings.get_string ("endpoint-url"),
-            _settings.get_string ("api-token"),
+        var data = "%s|%s|%s|%d|%d|%d|%b".printf (
+            _settings.get_string ("matrix-homeserver-url"),
+            _settings.get_string ("matrix-access-token"),
+            _settings.get_string ("matrix-room-id"),
             _settings.get_int ("min-interval-seconds"),
             _settings.get_int ("max-interval-seconds"),
             _settings.get_int ("max-local-screenshots"),
@@ -188,27 +195,18 @@ public class Vigil.Services.TamperDetectionService : Object {
                 "Maximum interval set to %d seconds (> 2 hours)".printf (max_interval));
         }
 
-        // Check if endpoint was cleared
-        string endpoint = _settings.get_string ("endpoint-url");
-        if (endpoint == "") {
-            emit_tamper ("endpoint_cleared",
-                "Upload endpoint URL has been cleared");
-        }
-    }
+        // Check if Matrix transport was cleared
+        string hs_url = _settings.get_string ("matrix-homeserver-url");
+        string token = _settings.get_string ("matrix-access-token");
+        string room_id = _settings.get_string ("matrix-room-id");
 
-    /**
-     * Check if screenshot portal permission is still granted.
-     */
-    public void check_screenshot_permission () {
-        // On Wayland, check if the portal is accessible
-        var session = Vigil.Utils.detect_session_type ();
-        if (session != Vigil.Utils.SessionType.WAYLAND) {
-            return; // Only relevant on Wayland
+        if (hs_url == "" && token == "" && room_id == "") {
+            emit_tamper ("matrix_cleared",
+                "All Matrix transport settings have been cleared");
+        } else if (hs_url == "" || token == "" || room_id == "") {
+            emit_tamper ("matrix_incomplete",
+                "Matrix transport settings are partially cleared (transport broken)");
         }
-
-        // We check by trying to talk to the portal; actual permission
-        // is verified when a screenshot is attempted. If screenshots
-        // start failing, ScreenshotService reports it and we pick it up.
     }
 
     /**
@@ -239,6 +237,30 @@ public class Vigil.Services.TamperDetectionService : Object {
         } catch (Error e) {
             emit_tamper ("binary_unreadable",
                 "Cannot read daemon binary: %s".printf (e.message));
+        }
+    }
+
+    /**
+     * Connect to GSettings changed signals for reactive tamper detection.
+     * Any change to a critical key triggers an immediate settings check.
+     */
+    private void connect_settings_signals () {
+        string[] critical_keys = {
+            "monitoring-enabled",
+            "min-interval-seconds",
+            "max-interval-seconds",
+            "matrix-homeserver-url",
+            "matrix-access-token",
+            "matrix-room-id"
+        };
+
+        foreach (var key in critical_keys) {
+            _settings.changed[key].connect (() => {
+                if (is_running) {
+                    debug ("Critical setting changed, running tamper check");
+                    check_settings_sanity ();
+                }
+            });
         }
     }
 

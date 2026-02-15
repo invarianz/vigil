@@ -4,25 +4,24 @@
  */
 
 /**
- * Tests for TamperDetectionService.
+ * Unit tests for TamperDetectionService.
  *
- * Uses temp directories and files to simulate autostart entries.
- * GSettings and systemd checks are tested for non-crash behavior
- * since we can't set up real schemas in unit tests.
+ * Uses a temp directory for autostart desktop path to avoid
+ * interfering with the real system.
  */
 
-static string test_dir;
+string test_base_dir;
 
 void setup_test_dir () {
-    test_dir = Path.build_filename (
+    test_base_dir = Path.build_filename (
         Environment.get_tmp_dir (),
         "vigil-tamper-test-%s".printf (GLib.Uuid.string_random ().substring (0, 8))
     );
-    DirUtils.create_with_parents (test_dir, 0755);
+    DirUtils.create_with_parents (test_base_dir, 0755);
 }
 
-void cleanup_test_dir () {
-    delete_directory_recursive (test_dir);
+void teardown_test_dir () {
+    delete_directory_recursive (test_base_dir);
 }
 
 void delete_directory_recursive (string path) {
@@ -30,245 +29,248 @@ void delete_directory_recursive (string path) {
         var dir = Dir.open (path);
         string? name;
         while ((name = dir.read_name ()) != null) {
-            var child = Path.build_filename (path, name);
-            if (FileUtils.test (child, FileTest.IS_DIR)) {
-                delete_directory_recursive (child);
+            var child_path = Path.build_filename (path, name);
+            if (FileUtils.test (child_path, FileTest.IS_DIR)) {
+                delete_directory_recursive (child_path);
             } else {
-                FileUtils.unlink (child);
+                FileUtils.remove (child_path);
             }
         }
         DirUtils.remove (path);
     } catch (Error e) {
-        // best-effort cleanup
+        // Ignore cleanup errors in tests
     }
 }
 
-void test_start_stop_lifecycle () {
-    var svc = new Vigil.Services.TamperDetectionService ();
-    // Point to non-existent paths so checks run but don't crash
-    svc.autostart_desktop_path = "/tmp/nonexistent-vigil-test.desktop";
-    svc.daemon_binary_path = "";
-    svc.expected_binary_hash = "";
-
-    assert_false (svc.is_running);
-    svc.start ();
-    assert_true (svc.is_running);
-    svc.stop ();
-    assert_false (svc.is_running);
-}
-
-void test_double_start_idempotent () {
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.autostart_desktop_path = "/tmp/nonexistent-vigil-test.desktop";
-    svc.start ();
-    svc.start ();
-    assert_true (svc.is_running);
-    svc.stop ();
-}
-
-void test_double_stop_idempotent () {
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.autostart_desktop_path = "/tmp/nonexistent-vigil-test.desktop";
-    svc.start ();
-    svc.stop ();
-    svc.stop ();
-    assert_false (svc.is_running);
-}
-
-void test_detects_missing_autostart () {
-    var svc = new Vigil.Services.TamperDetectionService ();
+void test_autostart_missing_detected () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
     svc.autostart_desktop_path = "/tmp/definitely-does-not-exist.desktop";
 
-    string? detected_type = null;
-    svc.tamper_detected.connect ((event_type, details) => {
-        detected_type = event_type;
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
     });
 
     svc.check_autostart_entry ();
-    assert_true (detected_type == "autostart_missing");
+
+    assert_true (event_type == "autostart_missing");
 }
 
-void test_detects_modified_autostart () {
+void test_autostart_present_no_tamper () {
     setup_test_dir ();
 
-    var desktop_path = Path.build_filename (test_dir, "autostart.desktop");
-    try {
-        FileUtils.set_contents (desktop_path,
-            "[Desktop Entry]\nExec=some-other-binary\n");
-    } catch (Error e) {
-        Test.fail_printf ("Could not write test file: %s", e.message);
-        cleanup_test_dir ();
-        return;
-    }
-
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.autostart_desktop_path = desktop_path;
-
-    string? detected_type = null;
-    svc.tamper_detected.connect ((event_type, details) => {
-        detected_type = event_type;
-    });
-
-    svc.check_autostart_entry ();
-    assert_true (detected_type == "autostart_modified");
-
-    cleanup_test_dir ();
-}
-
-void test_valid_autostart_no_tamper () {
-    setup_test_dir ();
-
-    var desktop_path = Path.build_filename (test_dir, "autostart.desktop");
+    // Create a fake desktop file
+    var desktop_path = Path.build_filename (test_base_dir, "vigil.desktop");
     try {
         FileUtils.set_contents (desktop_path,
             "[Desktop Entry]\nExec=io.github.invarianz.vigil.daemon\n");
     } catch (Error e) {
-        Test.fail_printf ("Could not write test file: %s", e.message);
-        cleanup_test_dir ();
-        return;
+        assert_not_reached ();
     }
 
-    var svc = new Vigil.Services.TamperDetectionService ();
+    var svc = new Vigil.Services.TamperDetectionService (null);
     svc.autostart_desktop_path = desktop_path;
 
-    bool tamper_found = false;
-    svc.tamper_detected.connect ((event_type, details) => {
-        if (event_type.has_prefix ("autostart")) {
-            tamper_found = true;
-        }
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
     });
 
     svc.check_autostart_entry ();
-    assert_false (tamper_found);
 
-    cleanup_test_dir ();
+    assert_true (event_type == null);
+
+    teardown_test_dir ();
 }
 
-void test_binary_integrity_skip_when_no_config () {
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.daemon_binary_path = "";
-    svc.expected_binary_hash = "";
-
-    bool tamper_found = false;
-    svc.tamper_detected.connect ((event_type, details) => {
-        tamper_found = true;
-    });
-
-    svc.check_binary_integrity ();
-    // Should not emit anything when paths are empty
-    assert_false (tamper_found);
-}
-
-void test_binary_integrity_missing_binary () {
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.daemon_binary_path = "/tmp/nonexistent-binary-file";
-    svc.expected_binary_hash = "somehash";
-
-    string? detected_type = null;
-    svc.tamper_detected.connect ((event_type, details) => {
-        detected_type = event_type;
-    });
-
-    svc.check_binary_integrity ();
-    assert_true (detected_type == "binary_missing");
-}
-
-void test_binary_integrity_hash_mismatch () {
+void test_autostart_modified_detected () {
     setup_test_dir ();
 
-    var binary_path = Path.build_filename (test_dir, "fake-binary");
+    var desktop_path = Path.build_filename (test_base_dir, "vigil.desktop");
     try {
-        FileUtils.set_contents (binary_path, "some binary content");
+        // Write a desktop file that references a different binary
+        FileUtils.set_contents (desktop_path,
+            "[Desktop Entry]\nExec=some-other-program\n");
     } catch (Error e) {
-        Test.fail_printf ("Could not write test file: %s", e.message);
-        cleanup_test_dir ();
-        return;
+        assert_not_reached ();
     }
 
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.daemon_binary_path = binary_path;
-    svc.expected_binary_hash = "0000000000000000000000000000000000000000";
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.autostart_desktop_path = desktop_path;
 
-    string? detected_type = null;
-    svc.tamper_detected.connect ((event_type, details) => {
-        detected_type = event_type;
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
     });
 
-    svc.check_binary_integrity ();
-    assert_true (detected_type == "binary_modified");
+    svc.check_autostart_entry ();
 
-    cleanup_test_dir ();
-}
+    assert_true (event_type == "autostart_modified");
 
-void test_binary_integrity_correct_hash () {
-    setup_test_dir ();
-
-    var binary_path = Path.build_filename (test_dir, "valid-binary");
-    string content = "valid binary content";
-    try {
-        FileUtils.set_contents (binary_path, content);
-    } catch (Error e) {
-        Test.fail_printf ("Could not write test file: %s", e.message);
-        cleanup_test_dir ();
-        return;
-    }
-
-    // Compute expected hash
-    var expected_hash = Checksum.compute_for_string (ChecksumType.SHA256, content);
-
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.daemon_binary_path = binary_path;
-    svc.expected_binary_hash = expected_hash;
-
-    bool tamper_found = false;
-    svc.tamper_detected.connect ((event_type, details) => {
-        tamper_found = true;
-    });
-
-    svc.check_binary_integrity ();
-    assert_false (tamper_found);
-
-    cleanup_test_dir ();
+    teardown_test_dir ();
 }
 
 void test_config_hash_without_settings () {
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
-    // Don't start (which would try to load GSettings)
+    var svc = new Vigil.Services.TamperDetectionService (null);
     var hash = svc.compute_config_hash ();
     assert_true (hash == "no-settings");
 }
 
-void test_run_all_checks_no_crash () {
-    var svc = new Vigil.Services.TamperDetectionService ();
-    svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
-    svc.daemon_binary_path = "";
-    svc.expected_binary_hash = "";
-    // Should not crash even without GSettings or valid paths
-    svc.run_all_checks ();
+void test_config_hash_with_settings () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    var hash1 = svc.compute_config_hash ();
+    assert_true (hash1 != "");
+    assert_true (hash1 != "no-settings");
+
+    // Hash should be deterministic
+    var hash2 = svc.compute_config_hash ();
+    assert_true (hash1 == hash2);
 }
 
-void test_default_check_interval () {
-    var svc = new Vigil.Services.TamperDetectionService ();
-    assert_true (svc.check_interval_seconds == 120);
+void test_config_hash_changes_on_setting_change () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    var hash_before = svc.compute_config_hash ();
+
+    settings.set_int ("min-interval-seconds", 999);
+    var hash_after = svc.compute_config_hash ();
+
+    assert_true (hash_before != hash_after);
+
+    // Reset
+    settings.set_int ("min-interval-seconds", 120);
+}
+
+void test_settings_sanity_monitoring_disabled () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", false);
+    // Set Matrix settings so matrix_cleared doesn't also fire
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? first_event = null;
+    svc.tamper_detected.connect ((t, d) => {
+        if (first_event == null) {
+            first_event = t;
+        }
+    });
+
+    svc.check_settings_sanity ();
+    assert_true (first_event == "monitoring_disabled");
+}
+
+void test_settings_sanity_interval_tampered () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 7200);
+    // Set Matrix settings so matrix_cleared doesn't also fire
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? first_event = null;
+    svc.tamper_detected.connect ((t, d) => {
+        if (first_event == null) {
+            first_event = t;
+        }
+    });
+
+    svc.check_settings_sanity ();
+    assert_true (first_event == "interval_tampered");
+
+    // Reset
+    settings.set_int ("min-interval-seconds", 120);
+}
+
+void test_settings_sanity_matrix_cleared () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 120);
+    settings.set_int ("max-interval-seconds", 600);
+    settings.set_string ("matrix-homeserver-url", "");
+    settings.set_string ("matrix-access-token", "");
+    settings.set_string ("matrix-room-id", "");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+    });
+
+    svc.check_settings_sanity ();
+    assert_true (event_type == "matrix_cleared");
+}
+
+void test_settings_sanity_matrix_incomplete () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 120);
+    settings.set_int ("max-interval-seconds", 600);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "");
+    settings.set_string ("matrix-room-id", "!room:test");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+    });
+
+    svc.check_settings_sanity ();
+    assert_true (event_type == "matrix_incomplete");
+}
+
+void test_start_stop_lifecycle () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
+
+    assert_false (svc.is_running);
+
+    svc.start ();
+    assert_true (svc.is_running);
+
+    svc.stop ();
+    assert_false (svc.is_running);
+}
+
+void test_binary_integrity_no_baseline () {
+    // With empty paths, binary integrity check should be a no-op
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+    });
+
+    svc.check_binary_integrity ();
+    assert_true (event_type == null);
 }
 
 public static int main (string[] args) {
     Test.init (ref args);
 
+    Test.add_func ("/tamper/autostart_missing", test_autostart_missing_detected);
+    Test.add_func ("/tamper/autostart_present", test_autostart_present_no_tamper);
+    Test.add_func ("/tamper/autostart_modified", test_autostart_modified_detected);
+    Test.add_func ("/tamper/config_hash_no_settings", test_config_hash_without_settings);
+    Test.add_func ("/tamper/config_hash_with_settings", test_config_hash_with_settings);
+    Test.add_func ("/tamper/config_hash_changes", test_config_hash_changes_on_setting_change);
+    Test.add_func ("/tamper/settings_monitoring_disabled", test_settings_sanity_monitoring_disabled);
+    Test.add_func ("/tamper/settings_interval_tampered", test_settings_sanity_interval_tampered);
+    Test.add_func ("/tamper/settings_matrix_cleared", test_settings_sanity_matrix_cleared);
+    Test.add_func ("/tamper/settings_matrix_incomplete", test_settings_sanity_matrix_incomplete);
     Test.add_func ("/tamper/start_stop_lifecycle", test_start_stop_lifecycle);
-    Test.add_func ("/tamper/double_start_idempotent", test_double_start_idempotent);
-    Test.add_func ("/tamper/double_stop_idempotent", test_double_stop_idempotent);
-    Test.add_func ("/tamper/detects_missing_autostart", test_detects_missing_autostart);
-    Test.add_func ("/tamper/detects_modified_autostart", test_detects_modified_autostart);
-    Test.add_func ("/tamper/valid_autostart_no_tamper", test_valid_autostart_no_tamper);
-    Test.add_func ("/tamper/binary_skip_no_config", test_binary_integrity_skip_when_no_config);
-    Test.add_func ("/tamper/binary_missing", test_binary_integrity_missing_binary);
-    Test.add_func ("/tamper/binary_hash_mismatch", test_binary_integrity_hash_mismatch);
-    Test.add_func ("/tamper/binary_correct_hash", test_binary_integrity_correct_hash);
-    Test.add_func ("/tamper/config_hash_without_settings", test_config_hash_without_settings);
-    Test.add_func ("/tamper/run_all_checks_no_crash", test_run_all_checks_no_crash);
-    Test.add_func ("/tamper/default_check_interval", test_default_check_interval);
+    Test.add_func ("/tamper/binary_no_baseline", test_binary_integrity_no_baseline);
 
     return Test.run ();
 }

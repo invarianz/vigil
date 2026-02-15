@@ -7,8 +7,8 @@
  * Tests for MatrixTransportService.
  *
  * These test configuration checking, transaction ID generation,
- * JSON content building, and error paths. Actual HTTP calls to
- * a Matrix server are not tested here.
+ * and error paths. Actual HTTP calls to a Matrix server are not
+ * tested here.
  */
 
 void test_not_configured_by_default () {
@@ -55,7 +55,6 @@ void test_txn_id_has_prefix () {
 
 void test_send_screenshot_fails_unconfigured () {
     var svc = new Vigil.Services.MatrixTransportService ();
-    // Not configured
 
     var loop = new MainLoop ();
     bool result = true;
@@ -103,26 +102,6 @@ void test_send_text_fails_unconfigured () {
     assert_false (result);
 }
 
-void test_send_heartbeat_fails_unconfigured () {
-    var svc = new Vigil.Services.MatrixTransportService ();
-
-    var loop = new MainLoop ();
-    bool result = true;
-
-    svc.send_heartbeat.begin (5, 2, 3600, (obj, res) => {
-        result = svc.send_heartbeat.end (res);
-        loop.quit ();
-    });
-
-    Timeout.add (100, () => {
-        loop.quit ();
-        return Source.REMOVE;
-    });
-    loop.run ();
-
-    assert_false (result);
-}
-
 void test_verify_connection_fails_unconfigured () {
     var svc = new Vigil.Services.MatrixTransportService ();
 
@@ -143,22 +122,38 @@ void test_verify_connection_fails_unconfigured () {
     assert_true (user_id == null);
 }
 
-void test_default_device_name () {
-    var svc = new Vigil.Services.MatrixTransportService ();
-    assert_true (svc.device_name == "Vigil");
-}
-
 void test_properties_settable () {
     var svc = new Vigil.Services.MatrixTransportService ();
     svc.homeserver_url = "https://hs.test";
     svc.access_token = "tok123";
     svc.room_id = "!room:test";
-    svc.device_name = "MyDevice";
 
     assert_true (svc.homeserver_url == "https://hs.test");
     assert_true (svc.access_token == "tok123");
     assert_true (svc.room_id == "!room:test");
-    assert_true (svc.device_name == "MyDevice");
+}
+
+void test_login_fails_with_bad_url () {
+    var svc = new Vigil.Services.MatrixTransportService ();
+
+    var loop = new MainLoop ();
+    string? token = "something";
+
+    Test.expect_message (null, LogLevelFlags.LEVEL_WARNING, "*login*");
+
+    svc.login.begin ("http://localhost:1", "user", "pass", (obj, res) => {
+        token = svc.login.end (res);
+        loop.quit ();
+    });
+
+    Timeout.add (5000, () => {
+        loop.quit ();
+        return Source.REMOVE;
+    });
+    loop.run ();
+
+    Test.assert_expected_messages ();
+    assert_true (token == null);
 }
 
 public static int main (string[] args) {
@@ -172,10 +167,9 @@ public static int main (string[] args) {
     Test.add_func ("/matrix/txn_id_prefix", test_txn_id_has_prefix);
     Test.add_func ("/matrix/send_screenshot_unconfigured", test_send_screenshot_fails_unconfigured);
     Test.add_func ("/matrix/send_text_unconfigured", test_send_text_fails_unconfigured);
-    Test.add_func ("/matrix/send_heartbeat_unconfigured", test_send_heartbeat_fails_unconfigured);
     Test.add_func ("/matrix/verify_connection_unconfigured", test_verify_connection_fails_unconfigured);
-    Test.add_func ("/matrix/default_device_name", test_default_device_name);
     Test.add_func ("/matrix/properties_settable", test_properties_settable);
+    Test.add_func ("/matrix/login_fails_bad_url", test_login_fails_with_bad_url);
 
     return Test.run ();
 }

@@ -12,10 +12,6 @@
  *   - Status JSON generation
  *   - Signal propagation (tamper events)
  *   - Property accessors
- *
- * We can't test actual D-Bus export in unit tests (needs a bus),
- * but we CAN test all the logic inside the server object by
- * constructing it directly with mock/real service instances.
  */
 
 static string test_storage_dir;
@@ -51,28 +47,24 @@ void delete_directory_recursive (string path) {
 
 /**
  * Create a DBusServer with real service objects (but no D-Bus export).
- * We pass a test GSettings backend so no real schema is needed.
  */
 Vigil.Daemon.DBusServer create_test_server () {
     setup_storage ();
 
     var screenshot_svc = new Vigil.Services.ScreenshotService ();
     var scheduler_svc = new Vigil.Services.SchedulerService ();
-    var upload_svc = new Vigil.Services.UploadService ();
     var storage_svc = new Vigil.Services.StorageService (test_storage_dir);
-    var heartbeat_svc = new Vigil.Services.HeartbeatService ();
+    var matrix_svc = new Vigil.Services.MatrixTransportService ();
+    var heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
     var tamper_svc = new Vigil.Services.TamperDetectionService (null);
     tamper_svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
 
     // meson test sets GSETTINGS_SCHEMA_DIR and GSETTINGS_BACKEND=memory
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
 
-    var matrix_svc = new Vigil.Services.MatrixTransportService ();
-
     return new Vigil.Daemon.DBusServer (
         screenshot_svc,
         scheduler_svc,
-        upload_svc,
         storage_svc,
         heartbeat_svc,
         tamper_svc,
@@ -120,19 +112,17 @@ void test_get_status_json () {
 void test_tamper_events_propagated () {
     var screenshot_svc = new Vigil.Services.ScreenshotService ();
     var scheduler_svc = new Vigil.Services.SchedulerService ();
-    var upload_svc = new Vigil.Services.UploadService ();
 
     setup_storage ();
     var storage_svc = new Vigil.Services.StorageService (test_storage_dir);
-    var heartbeat_svc = new Vigil.Services.HeartbeatService ();
+    var matrix_svc = new Vigil.Services.MatrixTransportService ();
+    var heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
     var tamper_svc = new Vigil.Services.TamperDetectionService (null);
     tamper_svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
 
-    var matrix_svc = new Vigil.Services.MatrixTransportService ();
-
     var server = new Vigil.Daemon.DBusServer (
-        screenshot_svc, scheduler_svc, upload_svc,
+        screenshot_svc, scheduler_svc,
         storage_svc, heartbeat_svc, tamper_svc, matrix_svc, settings
     );
 

@@ -24,7 +24,6 @@ unit_tests = {
     'SessionDetector': 'SessionDetectorTest.vala',
     'SchedulerService': 'SchedulerServiceTest.vala',
     'StorageService': 'StorageServiceTest.vala',
-    'UploadService': 'UploadServiceTest.vala',
     'HeartbeatService': 'HeartbeatServiceTest.vala',
     'TamperDetectionService': 'TamperDetectionServiceTest.vala',
     'MatrixTransportService': 'MatrixTransportServiceTest.vala',

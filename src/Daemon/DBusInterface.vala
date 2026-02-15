@@ -50,7 +50,6 @@ public class Vigil.Daemon.DBusServer : Object {
 
     private Vigil.Services.ScreenshotService _screenshot_svc;
     private Vigil.Services.SchedulerService _scheduler_svc;
-    private Vigil.Services.UploadService _upload_svc;
     private Vigil.Services.StorageService _storage_svc;
     private Vigil.Services.HeartbeatService _heartbeat_svc;
     private Vigil.Services.TamperDetectionService _tamper_svc;
@@ -58,6 +57,7 @@ public class Vigil.Daemon.DBusServer : Object {
     private GLib.Settings _settings;
 
     private GenericArray<string> _recent_tamper_events;
+    private int _cached_pending_count = 0;
 
     /* D-Bus properties */
 
@@ -89,7 +89,7 @@ public class Vigil.Daemon.DBusServer : Object {
 
     public int pending_upload_count {
         get {
-            return (int) _storage_svc.get_pending_screenshots ().length;
+            return _cached_pending_count;
         }
     }
 
@@ -124,7 +124,6 @@ public class Vigil.Daemon.DBusServer : Object {
     public DBusServer (
         Vigil.Services.ScreenshotService screenshot_svc,
         Vigil.Services.SchedulerService scheduler_svc,
-        Vigil.Services.UploadService upload_svc,
         Vigil.Services.StorageService storage_svc,
         Vigil.Services.HeartbeatService heartbeat_svc,
         Vigil.Services.TamperDetectionService tamper_svc,
@@ -133,7 +132,6 @@ public class Vigil.Daemon.DBusServer : Object {
     ) {
         _screenshot_svc = screenshot_svc;
         _scheduler_svc = scheduler_svc;
-        _upload_svc = upload_svc;
         _storage_svc = storage_svc;
         _heartbeat_svc = heartbeat_svc;
         _tamper_svc = tamper_svc;
@@ -202,9 +200,6 @@ public class Vigil.Daemon.DBusServer : Object {
         bind_settings ();
 
         // Start heartbeat
-        _heartbeat_svc.device_id = get_or_create_device_id ();
-        _heartbeat_svc.endpoint_url = _settings.get_string ("endpoint-url");
-        _heartbeat_svc.api_token = _settings.get_string ("api-token");
         _heartbeat_svc.start ();
 
         // Start tamper detection
@@ -214,6 +209,9 @@ public class Vigil.Daemon.DBusServer : Object {
         if (_settings.get_boolean ("monitoring-enabled")) {
             start_monitoring ();
         }
+
+        // Update cached pending count
+        refresh_pending_count ();
 
         // Retry pending uploads
         yield retry_pending_uploads ();
@@ -248,8 +246,6 @@ public class Vigil.Daemon.DBusServer : Object {
             screenshot_capture_failed (msg);
         });
 
-        // upload_succeeded is handled directly in handle_capture now
-
         _tamper_svc.tamper_detected.connect ((event_type, details) => {
             _heartbeat_svc.report_tamper_event ("%s: %s".printf (event_type, details));
             _recent_tamper_events.add ("%s: %s".printf (event_type, details));
@@ -259,7 +255,7 @@ public class Vigil.Daemon.DBusServer : Object {
             }
             tamper_event (event_type, details);
 
-            // Send tamper alerts via Matrix
+            // Send tamper alerts via Matrix immediately
             if (_matrix_svc.is_configured) {
                 _matrix_svc.send_alert.begin (event_type, details);
             }
@@ -267,7 +263,8 @@ public class Vigil.Daemon.DBusServer : Object {
 
         _heartbeat_svc.heartbeat_sent.connect (() => {
             _heartbeat_svc.config_hash = _tamper_svc.compute_config_hash ();
-            _heartbeat_svc.pending_upload_count = pending_upload_count;
+            refresh_pending_count ();
+            _heartbeat_svc.pending_upload_count = _cached_pending_count;
         });
 
         // Listen for monitoring toggle from settings
@@ -277,7 +274,6 @@ public class Vigil.Daemon.DBusServer : Object {
                 start_monitoring ();
             } else if (!enabled && monitoring_active) {
                 stop_monitoring ();
-                // The tamper detection service will flag this
             }
         });
     }
@@ -285,9 +281,6 @@ public class Vigil.Daemon.DBusServer : Object {
     private void apply_settings () {
         _scheduler_svc.min_interval_seconds = _settings.get_int ("min-interval-seconds");
         _scheduler_svc.max_interval_seconds = _settings.get_int ("max-interval-seconds");
-        _upload_svc.endpoint_url = _settings.get_string ("endpoint-url");
-        _upload_svc.api_token = _settings.get_string ("api-token");
-        _upload_svc.device_id = get_or_create_device_id ();
         _storage_svc.max_local_screenshots = _settings.get_int ("max-local-screenshots");
 
         // Matrix transport settings
@@ -302,14 +295,6 @@ public class Vigil.Daemon.DBusServer : Object {
         });
         _settings.changed["max-interval-seconds"].connect (() => {
             _scheduler_svc.max_interval_seconds = _settings.get_int ("max-interval-seconds");
-        });
-        _settings.changed["endpoint-url"].connect (() => {
-            _upload_svc.endpoint_url = _settings.get_string ("endpoint-url");
-            _heartbeat_svc.endpoint_url = _settings.get_string ("endpoint-url");
-        });
-        _settings.changed["api-token"].connect (() => {
-            _upload_svc.api_token = _settings.get_string ("api-token");
-            _heartbeat_svc.api_token = _settings.get_string ("api-token");
         });
         _settings.changed["max-local-screenshots"].connect (() => {
             _storage_svc.max_local_screenshots = _settings.get_int ("max-local-screenshots");
@@ -337,23 +322,14 @@ public class Vigil.Daemon.DBusServer : Object {
             }
 
             var now = new DateTime.now_local ();
-            bool delivered = false;
 
-            // Try Matrix transport first (preferred)
             if (_matrix_svc.is_configured) {
-                delivered = yield _matrix_svc.send_screenshot (path, now);
-            }
-
-            // Also try HTTP endpoint if configured
-            if (_upload_svc.endpoint_url != "") {
-                yield _upload_svc.upload (path, now);
-            }
-
-            // Mark uploaded if delivered via either transport
-            if (delivered) {
-                _storage_svc.mark_uploaded (path);
-                _heartbeat_svc.pending_upload_count = pending_upload_count;
-                status_changed ();
+                bool delivered = yield _matrix_svc.send_screenshot (path, now);
+                if (delivered) {
+                    _storage_svc.mark_uploaded (path);
+                    refresh_pending_count ();
+                    status_changed ();
+                }
             }
 
             _storage_svc.cleanup_old_screenshots ();
@@ -370,29 +346,19 @@ public class Vigil.Daemon.DBusServer : Object {
         for (int i = 0; i < pending.length; i++) {
             var item = pending[i];
             var now = item.capture_time ?? new DateTime.now_local ();
-            bool delivered = false;
 
             if (_matrix_svc.is_configured) {
-                delivered = yield _matrix_svc.send_screenshot (item.file_path, now);
-            }
-
-            if (_upload_svc.endpoint_url != "") {
-                var http_ok = yield _upload_svc.upload (item.file_path, now);
-                delivered = delivered || http_ok;
-            }
-
-            if (delivered) {
-                _storage_svc.mark_uploaded (item.file_path);
+                bool delivered = yield _matrix_svc.send_screenshot (item.file_path, now);
+                if (delivered) {
+                    _storage_svc.mark_uploaded (item.file_path);
+                }
             }
         }
+
+        refresh_pending_count ();
     }
 
-    private string get_or_create_device_id () {
-        var device_id = _settings.get_string ("device-id");
-        if (device_id == "") {
-            device_id = GLib.Uuid.string_random ();
-            _settings.set_string ("device-id", device_id);
-        }
-        return device_id;
+    private void refresh_pending_count () {
+        _cached_pending_count = (int) _storage_svc.get_pending_screenshots ().length;
     }
 }

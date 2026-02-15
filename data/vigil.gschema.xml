@@ -31,16 +31,6 @@
       <summary>Maximum interval between screenshots in seconds</summary>
     </key>
 
-    <!-- Upload (HTTP endpoint) -->
-    <key name="endpoint-url" type="s">
-      <default>''</default>
-      <summary>HTTPS endpoint URL for uploading screenshots</summary>
-    </key>
-    <key name="api-token" type="s">
-      <default>''</default>
-      <summary>API authentication token</summary>
-    </key>
-
     <!-- Matrix transport -->
     <key name="matrix-homeserver-url" type="s">
       <default>''</default>
@@ -76,7 +66,7 @@
     <!-- Heartbeat -->
     <key name="heartbeat-interval-seconds" type="i">
       <default>60</default>
-      <summary>Interval between heartbeat pings to the server in seconds</summary>
+      <summary>Interval between heartbeat pings in seconds</summary>
     </key>
 
     <!-- Tamper detection -->

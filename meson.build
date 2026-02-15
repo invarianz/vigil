@@ -75,7 +75,7 @@ service_src_files = files(
     'src' / 'Services' / 'GalaScreenshotBackend.vala',
     'src' / 'Services' / 'ScreenshotService.vala',
     'src' / 'Services' / 'SchedulerService.vala',
-    'src' / 'Services' / 'UploadService.vala',
+
     'src' / 'Services' / 'StorageService.vala',
     'src' / 'Services' / 'HeartbeatService.vala',
     'src' / 'Services' / 'TamperDetectionService.vala',

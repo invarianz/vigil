@@ -4,7 +4,7 @@
  */
 
 /**
- * Sends screenshots and heartbeat messages to a Matrix room.
+ * Sends screenshots and messages to a Matrix room.
  *
  * Uses the Matrix client-server API (HTTP/JSON) via libsoup.
  * Screenshots are uploaded to the content repository, then posted
@@ -16,15 +16,15 @@
  * plain Matrix API calls.
  *
  * Matrix API reference:
- *   Upload: POST /_matrix/media/v3/upload
- *   Send event: PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}
+ *   Login:      POST /_matrix/client/v3/login
+ *   Upload:     POST /_matrix/media/v3/upload
+ *   Send event: PUT  /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}
+ *   Who am I:   GET  /_matrix/client/v3/account/whoami
  */
 public class Vigil.Services.MatrixTransportService : Object {
 
     public signal void screenshot_sent (string file_path, string event_id);
     public signal void screenshot_send_failed (string file_path, string error_message);
-    public signal void heartbeat_message_sent ();
-    public signal void heartbeat_message_failed (string error_message);
 
     /** Matrix homeserver URL (or pantalaimon proxy URL for E2EE). */
     public string homeserver_url { get; set; default = ""; }
@@ -34,9 +34,6 @@ public class Vigil.Services.MatrixTransportService : Object {
 
     /** Matrix room ID to send screenshots to (e.g. !abc123:matrix.org). */
     public string room_id { get; set; default = ""; }
-
-    /** Device display name for messages. */
-    public string device_name { get; set; default = "Vigil"; }
 
     /** Whether this transport is configured and usable. */
     public bool is_configured {
@@ -71,6 +68,79 @@ public class Vigil.Services.MatrixTransportService : Object {
             _txn_counter,
             GLib.Uuid.string_random ().substring (0, 8)
         );
+    }
+
+    /**
+     * Log in to a Matrix homeserver with username and password.
+     *
+     * This eliminates the need for users to manually obtain an access
+     * token via curl. On success, the access_token property is set
+     * automatically.
+     *
+     * @param server_url The homeserver URL (or pantalaimon URL).
+     * @param username The Matrix username (without @).
+     * @param password The password.
+     * @return The access token on success, or null on failure.
+     */
+    public async string? login (string server_url, string username, string password) {
+        try {
+            var url = "%s/_matrix/client/v3/login".printf (
+                strip_trailing_slash (server_url)
+            );
+
+            var builder = new Json.Builder ();
+            builder.begin_object ();
+            builder.set_member_name ("type");
+            builder.add_string_value ("m.login.password");
+            builder.set_member_name ("identifier");
+            builder.begin_object ();
+            builder.set_member_name ("type");
+            builder.add_string_value ("m.id.user");
+            builder.set_member_name ("user");
+            builder.add_string_value (username);
+            builder.end_object ();
+            builder.set_member_name ("password");
+            builder.add_string_value (password);
+            builder.set_member_name ("initial_device_display_name");
+            builder.add_string_value ("Vigil");
+            builder.end_object ();
+
+            var gen = new Json.Generator ();
+            gen.set_root (builder.get_root ());
+            var body_json = gen.to_data (null);
+
+            var message = new Soup.Message ("POST", url);
+            message.set_request_body_from_bytes (
+                "application/json",
+                new Bytes (body_json.data)
+            );
+
+            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("Matrix login failed (HTTP %u): %s", status, resp ?? "");
+                return null;
+            }
+
+            var parser = new Json.Parser ();
+            parser.load_from_data ((string) response_bytes.get_data ());
+            var root = parser.get_root ().get_object ();
+
+            if (root.has_member ("access_token")) {
+                var token = root.get_string_member ("access_token");
+                access_token = token;
+                homeserver_url = server_url;
+                return token;
+            } else {
+                warning ("Matrix login response missing access_token");
+                return null;
+            }
+        } catch (Error e) {
+            warning ("Matrix login error: %s", e.message);
+            return null;
+        }
     }
 
     /**
@@ -124,7 +194,6 @@ public class Vigil.Services.MatrixTransportService : Object {
                 return null;
             }
 
-            // Parse {"content_uri": "mxc://..."}
             var parser = new Json.Parser ();
             parser.load_from_data ((string) response_bytes.get_data ());
             var root = parser.get_root ().get_object ();
@@ -260,7 +329,6 @@ public class Vigil.Services.MatrixTransportService : Object {
      */
     public async bool send_text_message (string text) {
         if (!is_configured) {
-            heartbeat_message_failed ("Matrix transport not configured");
             return false;
         }
 
@@ -277,32 +345,7 @@ public class Vigil.Services.MatrixTransportService : Object {
         var content_json = gen.to_data (null);
 
         var event_id = yield send_room_event ("m.room.message", content_json);
-        if (event_id == null) {
-            heartbeat_message_failed ("Failed to send text event");
-            return false;
-        }
-
-        heartbeat_message_sent ();
-        return true;
-    }
-
-    /**
-     * Send a heartbeat status message to the Matrix room.
-     *
-     * @param screenshots_count Screenshots taken since last heartbeat.
-     * @param pending_count Number of screenshots pending delivery.
-     * @param uptime_seconds Daemon uptime in seconds.
-     * @return true if successfully sent.
-     */
-    public async bool send_heartbeat (int screenshots_count, int pending_count, int64 uptime_seconds) {
-        var hours = uptime_seconds / 3600;
-        var minutes = (uptime_seconds % 3600) / 60;
-
-        var text = "Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d".printf (
-            hours, minutes, screenshots_count, pending_count
-        );
-
-        return yield send_text_message (text);
+        return event_id != null;
     }
 
     /**

@@ -9,7 +9,7 @@
  * This is a GApplication (not Gtk.Application) that:
  *   1. Owns the session bus name io.github.invarianz.vigil.Daemon
  *   2. Exports the DBusServer object on the bus
- *   3. Runs the monitoring engine (scheduler, screenshot, upload, heartbeat, tamper)
+ *   3. Runs the monitoring engine (scheduler, screenshot, Matrix, heartbeat, tamper)
  *   4. Notifies systemd watchdog periodically
  *
  * The daemon runs independently of the GUI. It is started via
@@ -21,7 +21,6 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
     private Vigil.Daemon.DBusServer _dbus_server;
     private Vigil.Services.ScreenshotService _screenshot_svc;
     private Vigil.Services.SchedulerService _scheduler_svc;
-    private Vigil.Services.UploadService _upload_svc;
     private Vigil.Services.StorageService _storage_svc;
     private Vigil.Services.HeartbeatService _heartbeat_svc;
     private Vigil.Services.TamperDetectionService _tamper_svc;
@@ -50,17 +49,15 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         // Create service instances
         _screenshot_svc = new Vigil.Services.ScreenshotService ();
         _scheduler_svc = new Vigil.Services.SchedulerService ();
-        _upload_svc = new Vigil.Services.UploadService ();
         _storage_svc = new Vigil.Services.StorageService ();
-        _heartbeat_svc = new Vigil.Services.HeartbeatService ();
         var matrix_svc = new Vigil.Services.MatrixTransportService ();
+        _heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
         var settings = new GLib.Settings ("io.github.invarianz.vigil");
         _tamper_svc = new Vigil.Services.TamperDetectionService (settings);
 
         _dbus_server = new Vigil.Daemon.DBusServer (
             _screenshot_svc,
             _scheduler_svc,
-            _upload_svc,
             _storage_svc,
             _heartbeat_svc,
             _tamper_svc,
@@ -81,17 +78,6 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
 
     protected override bool dbus_register (DBusConnection connection, string object_path) throws Error {
         base.dbus_register (connection, object_path);
-
-        // We must register the D-Bus object before startup finishes.
-        // The _dbus_server may not be created yet at this point, so
-        // we defer with an idle callback if needed. However, GApplication
-        // calls dbus_register before startup, so we create a minimal
-        // placeholder first and replace it in startup.
-        //
-        // Actually, dbus_register is called BEFORE startup(), so we
-        // need to create the services here or export after startup.
-        // Let's use the bus_acquired approach instead.
-
         return true;
     }
 
@@ -187,10 +173,6 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
     public static int main (string[] args) {
         var app = new Vigil.Daemon.DaemonApp ();
 
-        // When running as a GLib.Application with IS_SERVICE,
-        // we need to manually export the D-Bus object on the bus.
-        // GApplication handles bus name acquisition, but we hook
-        // into the connection to export our object.
         app.startup.connect (() => {
             var connection = app.get_dbus_connection ();
             if (connection != null) {
