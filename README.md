@@ -148,7 +148,21 @@ Your partner only needs to understand three things:
 2. **"TAMPER ALERT"** (bold) = something suspicious happened, investigate
 3. **"next check-in by" deadline passes** with no new message = something is wrong (covers kill, uninstall, etc.)
 
-### Step 4: Lock it down
+### Step 4: Settings are auto-locked
+
+After setup, vigil **automatically locks all settings** and sends a 6-character unlock code to your partner via Matrix:
+
+> Settings are now locked. Unlock code: A7KM3P -- Keep this code. The user will need it from you to change any settings.
+
+To change any settings later, the user must:
+1. Ask the partner for the unlock code
+2. Enter it in the GUI
+3. Make changes
+4. Click "Lock Settings" -- a **new** unlock code is generated and sent to the partner
+
+If someone tries to bypass the lock via command-line tools (`gsettings`, `dconf-editor`), a tamper alert fires immediately.
+
+### Step 5: Verify the setup
 
 Once everything is working, your accountability partner should verify:
 
@@ -163,6 +177,7 @@ The daemon monitors its own integrity and alerts via Matrix if:
 - Monitoring is disabled via GSettings
 - Matrix transport settings are cleared or partially removed
 - E2EE encryption keys are cleared
+- The settings lock is disabled or bypassed
 
 ## Configuration
 
@@ -177,6 +192,7 @@ All settings are stored via GSettings (`io.github.invarianz.vigil`):
 | `partner-matrix-id` | Partner's Matrix user ID | (empty) |
 | `device-id` | Matrix device ID (set during login) | (empty) |
 | `e2ee-pickle-key` | E2EE password for encrypting crypto state | (empty) |
+| `settings-locked` | Whether settings are locked (partner holds unlock code) | false |
 | `min-interval-seconds` | Minimum time between screenshots | 30 (30 sec) |
 | `max-interval-seconds` | Maximum time between screenshots | 120 (2 min) |
 | `max-local-screenshots` | Screenshots to keep locally | 100 |

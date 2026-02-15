@@ -16,6 +16,9 @@
  * One "Setup" button does everything: login, create encrypted room,
  * initialize E2EE, upload device keys, share room keys.
  *
+ * After setup, settings are locked. The partner receives an unlock code
+ * via Matrix. To change settings, the user must enter this code.
+ *
  * Schedule/storage/system settings are in a collapsible "Advanced" section.
  */
 public class Vigil.Widgets.SettingsView : Gtk.Box {
@@ -31,6 +34,14 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private Gtk.SpinButton max_interval_spin;
     private Gtk.SpinButton retention_spin;
     private Gtk.Switch autostart_switch;
+
+    private Gtk.Grid setup_grid;
+    private Gtk.Grid advanced_grid;
+    private Gtk.Entry unlock_entry;
+    private Gtk.Button unlock_button;
+    private Gtk.Button lock_button;
+    private Gtk.Label lock_status_label;
+    private Gtk.Box lock_box;
 
     private GLib.Settings settings;
     private Vigil.Services.MatrixTransportService _matrix_svc;
@@ -49,6 +60,49 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     construct {
         settings = new GLib.Settings ("io.github.invarianz.vigil");
         _matrix_svc = new Vigil.Services.MatrixTransportService ();
+
+        // Load existing Matrix credentials so we can send lock/unlock messages
+        _matrix_svc.homeserver_url = settings.get_string ("matrix-homeserver-url");
+        _matrix_svc.access_token = settings.get_string ("matrix-access-token");
+        _matrix_svc.room_id = settings.get_string ("matrix-room-id");
+
+        // --- Settings lock section ---
+        var lock_header = new Granite.HeaderLabel ("Settings Lock");
+
+        lock_status_label = new Gtk.Label ("") {
+            halign = Gtk.Align.START,
+            hexpand = true,
+            wrap = true
+        };
+
+        unlock_entry = new Gtk.Entry () {
+            placeholder_text = "Enter unlock code",
+            hexpand = true
+        };
+
+        unlock_button = new Gtk.Button.with_label ("Unlock");
+        unlock_button.add_css_class (Granite.STYLE_CLASS_DESTRUCTIVE_ACTION);
+        unlock_button.clicked.connect (on_unlock_clicked);
+
+        lock_button = new Gtk.Button.with_label ("Lock Settings");
+        lock_button.add_css_class (Granite.STYLE_CLASS_SUGGESTED_ACTION);
+        lock_button.clicked.connect (on_lock_clicked);
+
+        lock_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 8) {
+            margin_top = 8,
+            margin_bottom = 8,
+            margin_start = 16,
+            margin_end = 16
+        };
+        lock_box.add_css_class (Granite.STYLE_CLASS_CARD);
+
+        var unlock_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+        unlock_row.append (unlock_entry);
+        unlock_row.append (unlock_button);
+
+        lock_box.append (lock_status_label);
+        lock_box.append (unlock_row);
+        lock_box.append (lock_button);
 
         // --- Account setup section ---
         var setup_header = new Granite.HeaderLabel ("Account Setup");
@@ -107,7 +161,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             set_status ("Logged in (room not yet created)", false);
         }
 
-        var setup_grid = new Gtk.Grid () {
+        setup_grid = new Gtk.Grid () {
             row_spacing = 8,
             column_spacing = 16,
             margin_top = 8,
@@ -175,7 +229,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         };
         settings.bind ("autostart-enabled", autostart_switch, "active", SettingsBindFlags.DEFAULT);
 
-        var advanced_grid = new Gtk.Grid () {
+        advanced_grid = new Gtk.Grid () {
             row_spacing = 8,
             column_spacing = 16,
             margin_top = 8,
@@ -195,10 +249,15 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         advanced_grid.attach (autostart_switch, 1, 3);
 
         // Assemble the view
+        append (lock_header);
+        append (lock_box);
         append (setup_header);
         append (setup_grid);
         append (advanced_header);
         append (advanced_grid);
+
+        // Apply initial lock state
+        update_lock_ui ();
     }
 
     /**
@@ -295,6 +354,109 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         } else {
             // Partial success - login and room created but E2EE had issues
             set_status ("Setup mostly complete -- E2EE key sharing deferred until partner is online", true);
+        }
+
+        // Auto-lock settings after successful setup
+        yield lock_settings ();
+    }
+
+    /**
+     * Generate a random 6-character unlock code using unambiguous characters.
+     * Characters I/O/0/1 are excluded to avoid visual confusion.
+     */
+    private string generate_unlock_code () {
+        const string CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        var code = new StringBuilder ();
+        for (int i = 0; i < 6; i++) {
+            code.append_c (CHARS[Random.int_range (0, CHARS.length)]);
+        }
+        return code.str;
+    }
+
+    /**
+     * Hash an unlock code with SHA-256.
+     */
+    private string hash_code (string code) {
+        return Checksum.compute_for_string (ChecksumType.SHA256, code);
+    }
+
+    /**
+     * Lock settings and send the unlock code to the partner.
+     */
+    private async void lock_settings () {
+        var code = generate_unlock_code ();
+        settings.set_string ("unlock-code-hash", hash_code (code));
+        settings.set_boolean ("settings-locked", true);
+
+        // Send the unlock code to the partner via Matrix
+        var message = "Settings are now locked. Unlock code: %s -- Keep this code. The user will need it from you to change any settings.".printf (code);
+        yield _matrix_svc.send_text_message (message);
+
+        update_lock_ui ();
+    }
+
+    /**
+     * Verify the entered unlock code and unlock settings if correct.
+     */
+    private void on_unlock_clicked () {
+        var entered = unlock_entry.text.strip ().up ();
+        var stored_hash = settings.get_string ("unlock-code-hash");
+
+        if (stored_hash == "" || hash_code (entered) != stored_hash) {
+            lock_status_label.label = "Incorrect unlock code. Ask your accountability partner for the code.";
+            lock_status_label.add_css_class ("error");
+            return;
+        }
+
+        // Correct code -- send notification then unlock
+        _matrix_svc.send_text_message.begin (
+            "Settings unlocked (authorized by partner). Changes may follow."
+        );
+        settings.set_boolean ("settings-locked", false);
+        unlock_entry.text = "";
+        update_lock_ui ();
+    }
+
+    /**
+     * Re-lock settings with a new code.
+     */
+    private void on_lock_clicked () {
+        lock_settings.begin ();
+    }
+
+    /**
+     * Update the UI based on current lock state.
+     */
+    private void update_lock_ui () {
+        bool locked = settings.get_boolean ("settings-locked");
+        bool setup_done = settings.get_string ("matrix-access-token") != "";
+
+        // If setup hasn't been done yet, don't show lock UI
+        if (!setup_done) {
+            lock_box.visible = false;
+            setup_grid.sensitive = true;
+            advanced_grid.sensitive = true;
+            return;
+        }
+
+        lock_box.visible = true;
+
+        if (locked) {
+            lock_status_label.label = "Settings are locked. Ask your accountability partner for the unlock code to make changes.";
+            lock_status_label.remove_css_class ("error");
+            unlock_entry.visible = true;
+            unlock_button.visible = true;
+            lock_button.visible = false;
+            setup_grid.sensitive = false;
+            advanced_grid.sensitive = false;
+        } else {
+            lock_status_label.label = "Settings are unlocked. Make your changes, then lock when done.";
+            lock_status_label.remove_css_class ("error");
+            unlock_entry.visible = false;
+            unlock_button.visible = false;
+            lock_button.visible = true;
+            setup_grid.sensitive = true;
+            advanced_grid.sensitive = true;
         }
     }
 

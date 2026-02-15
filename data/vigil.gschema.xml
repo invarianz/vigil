@@ -73,6 +73,16 @@
       <summary>Maximum number of screenshots to keep locally</summary>
     </key>
 
+    <!-- Settings lock -->
+    <key name="settings-locked" type="b">
+      <default>false</default>
+      <summary>Whether settings are locked (requires partner unlock code to change)</summary>
+    </key>
+    <key name="unlock-code-hash" type="s">
+      <default>''</default>
+      <summary>SHA-256 hash of the current unlock code (plaintext held by partner)</summary>
+    </key>
+
     <!-- System -->
     <key name="autostart-enabled" type="b">
       <default>false</default>

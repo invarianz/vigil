@@ -224,6 +224,39 @@ public class Vigil.Services.TamperDetectionService : Object {
             emit_tamper ("e2ee_disabled",
                 "E2EE pickle key was cleared (encryption will not work)");
         }
+
+        // Check if settings lock was bypassed
+        check_settings_lock ();
+    }
+
+    /**
+     * Check that the settings lock hasn't been bypassed via CLI.
+     *
+     * If `settings-locked` was changed to false, or the unlock code hash
+     * was cleared while locked, this is a tamper event. The GUI sends a
+     * "Settings unlocked (authorized by partner)" message BEFORE toggling
+     * the lock, so the partner can distinguish legitimate vs. bypassed
+     * unlocks by checking whether that message preceded the alert.
+     */
+    public void check_settings_lock () {
+        if (_settings == null) {
+            return;
+        }
+
+        // If settings were previously locked (hash exists) but lock flag cleared
+        var hash = _settings.get_string ("unlock-code-hash");
+        var locked = _settings.get_boolean ("settings-locked");
+
+        if (hash != "" && !locked) {
+            emit_tamper ("settings_unlocked",
+                "Settings lock was disabled (unlock code may have been bypassed)");
+        }
+
+        // If lock is set but hash was cleared (attempt to make unlock trivial)
+        if (locked && hash == "") {
+            emit_tamper ("unlock_code_cleared",
+                "Unlock code hash was cleared while settings are locked");
+        }
     }
 
     /**
@@ -270,7 +303,9 @@ public class Vigil.Services.TamperDetectionService : Object {
             "matrix-access-token",
             "matrix-room-id",
             "device-id",
-            "e2ee-pickle-key"
+            "e2ee-pickle-key",
+            "settings-locked",
+            "unlock-code-hash"
         };
 
         foreach (var key in critical_keys) {

@@ -1,6 +1,6 @@
 # Copy the GSettings schema XML into the test build directory so
 # glib-compile-schemas can find it, then compile it.
-configure_file(
+test_schema = configure_file(
     input: meson.project_source_root() / 'data' / 'vigil.gschema.xml',
     output: 'io.github.invarianz.vigil.gschema.xml',
     copy: true,
@@ -8,6 +8,7 @@ configure_file(
 
 glib_compile_schemas = find_program('glib-compile-schemas')
 compiled_schemas = custom_target('compile-test-schemas',
+    input: test_schema,
     command: [glib_compile_schemas, meson.current_build_dir()],
     output: 'gschemas.compiled',
     build_by_default: true,

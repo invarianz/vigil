@@ -256,6 +256,76 @@ void test_binary_integrity_no_baseline () {
     assert_true (event_type == null);
 }
 
+void test_settings_lock_bypass_detected () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    // Simulate: lock was active (hash exists) but lock flag was cleared via CLI
+    settings.set_string ("unlock-code-hash", "somehash");
+    settings.set_boolean ("settings-locked", false);
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        if (event_type == null) {
+            event_type = t;
+        }
+    });
+
+    svc.check_settings_lock ();
+    assert_true (event_type == "settings_unlocked");
+
+    // Cleanup
+    settings.set_string ("unlock-code-hash", "");
+}
+
+void test_settings_lock_hash_cleared_detected () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    // Simulate: lock is set but hash cleared (attempt to make unlock trivial)
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        if (event_type == null) {
+            event_type = t;
+        }
+    });
+
+    svc.check_settings_lock ();
+    assert_true (event_type == "unlock_code_cleared");
+
+    // Cleanup
+    settings.set_boolean ("settings-locked", false);
+}
+
+void test_settings_lock_no_tamper_when_properly_locked () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "a_valid_hash");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+    });
+
+    svc.check_settings_lock ();
+    assert_true (event_type == null);
+
+    // Cleanup
+    settings.set_boolean ("settings-locked", false);
+    settings.set_string ("unlock-code-hash", "");
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -271,6 +341,9 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/settings_matrix_incomplete", test_settings_sanity_matrix_incomplete);
     Test.add_func ("/tamper/start_stop_lifecycle", test_start_stop_lifecycle);
     Test.add_func ("/tamper/binary_no_baseline", test_binary_integrity_no_baseline);
+    Test.add_func ("/tamper/lock_bypass_detected", test_settings_lock_bypass_detected);
+    Test.add_func ("/tamper/lock_hash_cleared", test_settings_lock_hash_cleared_detected);
+    Test.add_func ("/tamper/lock_properly_locked", test_settings_lock_no_tamper_when_properly_locked);
 
     return Test.run ();
 }
