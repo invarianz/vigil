@@ -246,7 +246,7 @@ public class Vigil.Daemon.DBusServer : Object {
             status_changed ();
         });
 
-        _screenshot_svc.screenshot_failed.connect ((msg, time) => {
+        _screenshot_svc.screenshot_failed.connect ((msg) => {
             screenshot_capture_failed (msg);
         });
 
@@ -403,11 +403,6 @@ public class Vigil.Daemon.DBusServer : Object {
     }
 
     private void refresh_pending_count () {
-        // Use the cached count if available (O(1)), fall back to full scan
-        if (_storage_svc.pending_count >= 0) {
-            _cached_pending_count = _storage_svc.pending_count;
-        } else {
-            _cached_pending_count = (int) _storage_svc.get_pending_screenshots ().length;
-        }
+        _cached_pending_count = _storage_svc.pending_count;
     }
 }

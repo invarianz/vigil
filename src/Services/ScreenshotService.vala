@@ -12,7 +12,7 @@
 public class Vigil.Services.ScreenshotService : Object {
 
     public signal void screenshot_taken (string file_path);
-    public signal void screenshot_failed (string error_message, DateTime timestamp);
+    public signal void screenshot_failed (string error_message);
 
     private IScreenshotBackend? _active_backend = null;
 
@@ -68,7 +68,7 @@ public class Vigil.Services.ScreenshotService : Object {
         if (_active_backend == null) {
             var msg = "No screenshot backend is available";
             warning (msg);
-            screenshot_failed (msg, new DateTime.now_local ());
+            screenshot_failed (msg);
             return false;
         }
 
@@ -83,7 +83,7 @@ public class Vigil.Services.ScreenshotService : Object {
                 _active_backend.backend_name, e.message
             );
             warning (msg);
-            screenshot_failed (msg, new DateTime.now_local ());
+            screenshot_failed (msg);
             return false;
         }
     }

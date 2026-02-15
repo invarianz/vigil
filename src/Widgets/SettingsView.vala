@@ -363,13 +363,27 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     /**
      * Generate a random 6-character unlock code using unambiguous characters.
      * Characters I/O/0/1 are excluded to avoid visual confusion.
+     *
+     * Uses /dev/urandom (CSPRNG) rather than GLib's PRNG so the code
+     * cannot be predicted from the RNG state.
      */
     private string generate_unlock_code () {
         const string CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
         var code = new StringBuilder ();
-        for (int i = 0; i < 6; i++) {
-            code.append_c (CHARS[Random.int_range (0, CHARS.length)]);
+
+        try {
+            var urandom = File.new_for_path ("/dev/urandom");
+            var stream = new DataInputStream (urandom.read (null));
+            for (int i = 0; i < 6; i++) {
+                code.append_c (CHARS[stream.read_byte (null) % CHARS.length]);
+            }
+            stream.close (null);
+        } catch (Error e) {
+            // Should never happen; /dev/urandom is always available on Linux
+            warning ("Failed to read /dev/urandom: %s", e.message);
+            return "ERRGEN";
         }
+
         return code.str;
     }
 

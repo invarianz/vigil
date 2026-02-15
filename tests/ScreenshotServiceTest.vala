@@ -53,10 +53,8 @@ void test_screenshot_service_no_backend_emits_failure () {
 
     // Don't initialize -- leave with no backend
     bool failed = false;
-    DateTime? fail_time = null;
-    service.screenshot_failed.connect ((msg, time) => {
+    service.screenshot_failed.connect ((msg) => {
         failed = true;
-        fail_time = time;
     });
 
     // Expect the "No screenshot backend is available" warning
@@ -78,7 +76,6 @@ void test_screenshot_service_no_backend_emits_failure () {
     Test.assert_expected_messages ();
 
     assert_true (failed);
-    assert_true (fail_time != null);
 }
 
 void test_screenshot_service_initialize_in_headless () {
