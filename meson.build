@@ -176,6 +176,15 @@ i18n.merge_file(
     install_dir: get_option('datadir') / 'metainfo'
 )
 
+# Application icons (hicolor theme)
+icon_sizes = ['32', '48', '64', '128']
+foreach size : icon_sizes
+    install_data(
+        'data' / 'icons' / size / app_id + '.svg',
+        install_dir: get_option('datadir') / 'icons' / 'hicolor' / size + 'x' + size / 'apps',
+    )
+endforeach
+
 # GSettings schema
 install_data(
     'data' / 'vigil.gschema.xml',

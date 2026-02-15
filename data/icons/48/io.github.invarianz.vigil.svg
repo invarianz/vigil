@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Vigil application icon (placeholder).
+  Replace this with a professionally designed icon before publishing.
+  elementary OS requires a 128x128 SVG with flat style and rounded corners.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4da1ff"/>
+      <stop offset="1" stop-color="#3689e6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded rectangle base (elementary OS style) -->
+  <rect x="8" y="8" width="112" height="112" rx="22" ry="22"
+        fill="url(#bg)" stroke="#2a6cb8" stroke-width="1"/>
+
+  <!-- Eye shape (vigil = watchfulness) -->
+  <ellipse cx="64" cy="64" rx="34" ry="22"
+           fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Iris -->
+  <circle cx="64" cy="64" r="13" fill="#ffffff"/>
+
+  <!-- Pupil -->
+  <circle cx="64" cy="64" r="7" fill="#1a4f7a"/>
+
+  <!-- Light reflection -->
+  <circle cx="68" cy="60" r="3" fill="#ffffff" opacity="0.8"/>
+
+  <!-- Shield outline around eye (protection / accountability) -->
+  <path d="M64 28 C44 28, 28 40, 28 64 C28 88, 48 104, 64 104 C80 104, 100 88, 100 64 C100 40, 84 28, 64 28 Z"
+        fill="none" stroke="#ffffff" stroke-width="3" opacity="0.35"/>
+</svg>

@@ -1,8 +1,24 @@
-# vigil
+<p align="center">
+  <img src="data/icons/128/io.github.invarianz.vigil.svg" alt="Vigil" width="128" height="128">
+</p>
 
-Accountability screenshot software for elementary OS.
+<h1 align="center">Vigil</h1>
 
-vigil takes screenshots of your screen at random intervals and sends them to your accountability partner via Matrix with native end-to-end encryption. It works on both X11 and Wayland, including elementary OS 7 and 8.
+<p align="center">
+  <strong>Accountability screenshot software for elementary OS</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/invarianz/Vigil/actions/workflows/ci.yml"><img src="https://github.com/invarianz/Vigil/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/invarianz/Vigil/blob/main/COPYING"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg" alt="License: GPL-3.0-or-later"></a>
+  <img src="https://img.shields.io/badge/platform-elementary%20OS%207%20%7C%208-64BAFF.svg" alt="Platform: elementary OS 7 | 8">
+  <img src="https://img.shields.io/badge/GTK-4-4A86CF.svg" alt="GTK 4">
+  <img src="https://img.shields.io/badge/encryption-Matrix%20E2EE-brightgreen.svg" alt="Encryption: Matrix E2EE">
+</p>
+
+---
+
+Vigil takes screenshots of your screen at random intervals and sends them to your accountability partner via Matrix with native end-to-end encryption. It works on both X11 and Wayland, including elementary OS 7 and 8.
 
 ## Features
 

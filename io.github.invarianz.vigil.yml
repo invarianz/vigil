@@ -1,0 +1,31 @@
+app-id: io.github.invarianz.vigil
+runtime: io.elementary.Platform
+runtime-version: '8'
+sdk: io.elementary.Sdk
+command: io.github.invarianz.vigil
+finish-args:
+  - '--share=ipc'
+  - '--socket=fallback-x11'
+  - '--socket=wayland'
+  - '--share=network'
+  - '--talk-name=org.freedesktop.portal.Desktop'
+  - '--talk-name=org.gnome.Gala.ScreenshotManager'
+  - '--talk-name=io.github.invarianz.vigil.Daemon'
+  - '--filesystem=xdg-data/io.github.invarianz.vigil:create'
+  - '--system-talk-name=org.freedesktop.login1'
+
+modules:
+  - name: libolm
+    buildsystem: cmake-ninja
+    config-opts:
+      - '-DCMAKE_BUILD_TYPE=Release'
+    sources:
+      - type: archive
+        url: https://gitlab.matrix.org/matrix-org/olm/-/archive/3.2.16/olm-3.2.16.tar.gz
+        sha256: 'FIXME'
+
+  - name: vigil
+    buildsystem: meson
+    sources:
+      - type: dir
+        path: .
