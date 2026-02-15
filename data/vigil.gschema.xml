@@ -34,7 +34,7 @@
     <!-- Matrix transport -->
     <key name="matrix-homeserver-url" type="s">
       <default>''</default>
-      <summary>Matrix homeserver URL (or pantalaimon proxy URL for E2EE)</summary>
+      <summary>Matrix homeserver URL</summary>
     </key>
     <key name="matrix-access-token" type="s">
       <default>''</default>
@@ -42,13 +42,19 @@
     </key>
     <key name="matrix-room-id" type="s">
       <default>''</default>
-      <summary>Matrix room ID to send screenshots to</summary>
+      <summary>Matrix room ID for screenshot delivery</summary>
+    </key>
+
+    <!-- Partner -->
+    <key name="partner-matrix-id" type="s">
+      <default>''</default>
+      <summary>Accountability partner's Matrix user ID (e.g. @partner:matrix.org)</summary>
     </key>
 
     <!-- Device -->
     <key name="device-id" type="s">
       <default>''</default>
-      <summary>Unique device identifier (auto-generated)</summary>
+      <summary>Matrix device identifier (auto-generated at login)</summary>
     </key>
 
     <!-- Storage -->

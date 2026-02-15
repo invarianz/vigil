@@ -21,6 +21,7 @@ json_dep = dependency('json-glib-1.0')
 soup_dep = dependency('libsoup-3.0', version: '>= 3.0')
 portal_dep = dependency('libportal', version: '>= 0.6')
 portal_gtk4_dep = dependency('libportal-gtk4', version: '>= 0.6')
+olm_dep = dependency('olm', version: '>= 3.0')
 
 add_project_arguments(
     '-DGETTEXT_PACKAGE="@0@"'.format(app_id),
@@ -29,6 +30,12 @@ add_project_arguments(
 
 add_project_arguments(
     '--define=GETTEXT_PACKAGE="@0@"'.format(app_id),
+    language: 'vala'
+)
+
+# Custom VAPI directory for libolm bindings
+add_project_arguments(
+    '--vapidir=' + meson.project_source_root() / 'vapi',
     language: 'vala'
 )
 
@@ -51,6 +58,7 @@ service_deps = [
     json_dep,
     soup_dep,
     portal_dep,
+    olm_dep,
 ]
 
 # All dependencies including GTK/Granite (for the GUI app)
@@ -64,6 +72,7 @@ all_dependencies = [
     soup_dep,
     portal_dep,
     portal_gtk4_dep,
+    olm_dep,
 ]
 
 # ──────────────────────────────────────────────────────────────
@@ -80,6 +89,7 @@ service_src_files = files(
     'src' / 'Services' / 'HeartbeatService.vala',
     'src' / 'Services' / 'TamperDetectionService.vala',
     'src' / 'Services' / 'MatrixTransportService.vala',
+    'src' / 'Services' / 'EncryptionService.vala',
     'src' / 'Utils' / 'SessionDetector.vala',
 )
 

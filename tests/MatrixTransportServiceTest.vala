@@ -133,6 +133,41 @@ void test_properties_settable () {
     assert_true (svc.room_id == "!room:test");
 }
 
+void test_encryption_property () {
+    var svc = new Vigil.Services.MatrixTransportService ();
+    assert_true (svc.encryption == null);
+
+    var enc = new Vigil.Services.EncryptionService ();
+    svc.encryption = enc;
+    assert_true (svc.encryption == enc);
+}
+
+void test_last_user_id_default () {
+    var svc = new Vigil.Services.MatrixTransportService ();
+    assert_true (svc.last_user_id == "");
+    assert_true (svc.last_device_id == "");
+}
+
+void test_create_room_fails_unconfigured () {
+    var svc = new Vigil.Services.MatrixTransportService ();
+
+    var loop = new MainLoop ();
+    string? room_id = "something";
+
+    svc.create_encrypted_room.begin ("@partner:test", (obj, res) => {
+        room_id = svc.create_encrypted_room.end (res);
+        loop.quit ();
+    });
+
+    Timeout.add (100, () => {
+        loop.quit ();
+        return Source.REMOVE;
+    });
+    loop.run ();
+
+    assert_true (room_id == null);
+}
+
 void test_login_fails_with_bad_url () {
     var svc = new Vigil.Services.MatrixTransportService ();
 
@@ -170,6 +205,9 @@ public static int main (string[] args) {
     Test.add_func ("/matrix/verify_connection_unconfigured", test_verify_connection_fails_unconfigured);
     Test.add_func ("/matrix/properties_settable", test_properties_settable);
     Test.add_func ("/matrix/login_fails_bad_url", test_login_fails_with_bad_url);
+    Test.add_func ("/matrix/encryption_property", test_encryption_property);
+    Test.add_func ("/matrix/last_user_id_default", test_last_user_id_default);
+    Test.add_func ("/matrix/create_room_unconfigured", test_create_room_fails_unconfigured);
 
     return Test.run ();
 }

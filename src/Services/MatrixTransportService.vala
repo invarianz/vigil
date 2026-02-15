@@ -7,26 +7,32 @@
  * Sends screenshots and messages to a Matrix room.
  *
  * Uses the Matrix client-server API (HTTP/JSON) via libsoup.
- * Screenshots are uploaded to the content repository, then posted
- * as m.image events in the configured room.
- *
- * For end-to-end encryption, configure the homeserver URL to point
- * at a pantalaimon proxy (http://localhost:8009). Pantalaimon handles
- * all Olm/Megolm crypto transparently -- this service just sends
- * plain Matrix API calls.
+ * With native E2EE via libolm, this service handles:
+ *   - Login (m.login.password)
+ *   - Homeserver auto-discovery via .well-known
+ *   - Encrypted room creation with partner invite
+ *   - Device key upload/query/claim
+ *   - Room key sharing via to-device messages
+ *   - Sending encrypted events (m.room.encrypted)
+ *   - Media upload and encrypted image sending
  *
  * Matrix API reference:
- *   Login:      POST /_matrix/client/v3/login
- *   Upload:     POST /_matrix/media/v3/upload
- *   Send event: PUT  /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}
- *   Who am I:   GET  /_matrix/client/v3/account/whoami
+ *   Login:       POST /_matrix/client/v3/login
+ *   Upload:      POST /_matrix/media/v3/upload
+ *   Send event:  PUT  /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}
+ *   Who am I:    GET  /_matrix/client/v3/account/whoami
+ *   Create room: POST /_matrix/client/v3/createRoom
+ *   Keys upload: POST /_matrix/client/v3/keys/upload
+ *   Keys query:  POST /_matrix/client/v3/keys/query
+ *   Keys claim:  POST /_matrix/client/v3/keys/claim
+ *   To-device:   PUT  /_matrix/client/v3/sendToDevice/{eventType}/{txnId}
  */
 public class Vigil.Services.MatrixTransportService : Object {
 
     public signal void screenshot_sent (string file_path, string event_id);
     public signal void screenshot_send_failed (string file_path, string error_message);
 
-    /** Matrix homeserver URL (or pantalaimon proxy URL for E2EE). */
+    /** Matrix homeserver URL. */
     public string homeserver_url { get; set; default = ""; }
 
     /** Matrix access token for authentication. */
@@ -41,6 +47,9 @@ public class Vigil.Services.MatrixTransportService : Object {
             return homeserver_url != "" && access_token != "" && room_id != "";
         }
     }
+
+    /** Optional EncryptionService for E2EE. */
+    public Vigil.Services.EncryptionService? encryption { get; set; default = null; }
 
     private Soup.Session _session;
     private int64 _txn_counter = 0;
@@ -71,13 +80,59 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
+     * Discover the homeserver URL from a server name via .well-known.
+     *
+     * If the user enters "matrix.org", this resolves it to
+     * "https://matrix-client.matrix.org" (or whatever the server advertises).
+     *
+     * @param server_name The server name (e.g. "matrix.org").
+     * @return The resolved homeserver URL, or null on failure.
+     */
+    public async string? discover_homeserver (string server_name) {
+        var name = server_name.strip ();
+
+        // If it's already a full URL, use it directly
+        if (name.has_prefix ("http://") || name.has_prefix ("https://")) {
+            return strip_trailing_slash (name);
+        }
+
+        // Try .well-known discovery
+        var well_known_url = "https://%s/.well-known/matrix/client".printf (name);
+
+        try {
+            var message = new Soup.Message ("GET", well_known_url);
+            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status == Soup.Status.OK) {
+                var parser = new Json.Parser ();
+                parser.load_from_data ((string) response_bytes.get_data ());
+                var root = parser.get_root ().get_object ();
+
+                if (root.has_member ("m.homeserver")) {
+                    var hs_obj = root.get_object_member ("m.homeserver");
+                    if (hs_obj.has_member ("base_url")) {
+                        var url = hs_obj.get_string_member ("base_url");
+                        debug ("Discovered homeserver: %s -> %s", name, url);
+                        return strip_trailing_slash (url);
+                    }
+                }
+            }
+        } catch (Error e) {
+            debug ("Well-known discovery failed for %s: %s", name, e.message);
+        }
+
+        // Fallback: assume https://<server_name>
+        return "https://%s".printf (name);
+    }
+
+    /**
      * Log in to a Matrix homeserver with username and password.
      *
-     * This eliminates the need for users to manually obtain an access
-     * token via curl. On success, the access_token property is set
-     * automatically.
+     * On success, sets the access_token and homeserver_url properties.
+     * Returns the access token.
      *
-     * @param server_url The homeserver URL (or pantalaimon URL).
+     * @param server_url The homeserver URL.
      * @param username The Matrix username (without @).
      * @param password The password.
      * @return The access token on success, or null on failure.
@@ -132,6 +187,15 @@ public class Vigil.Services.MatrixTransportService : Object {
                 var token = root.get_string_member ("access_token");
                 access_token = token;
                 homeserver_url = server_url;
+
+                // Store user_id and device_id from login response
+                if (root.has_member ("user_id")) {
+                    _last_user_id = root.get_string_member ("user_id");
+                }
+                if (root.has_member ("device_id")) {
+                    _last_device_id = root.get_string_member ("device_id");
+                }
+
                 return token;
             } else {
                 warning ("Matrix login response missing access_token");
@@ -140,6 +204,328 @@ public class Vigil.Services.MatrixTransportService : Object {
         } catch (Error e) {
             warning ("Matrix login error: %s", e.message);
             return null;
+        }
+    }
+
+    /** User ID from the most recent login response. */
+    private string _last_user_id = "";
+    public string last_user_id { get { return _last_user_id; } }
+
+    /** Device ID from the most recent login response. */
+    private string _last_device_id = "";
+    public string last_device_id { get { return _last_device_id; } }
+
+    /**
+     * Create a private encrypted DM room and invite the partner.
+     *
+     * This eliminates the need for users to manually create a room.
+     * The room is created with E2EE enabled from the start.
+     *
+     * @param partner_id The partner's Matrix user ID (e.g. @partner:matrix.org).
+     * @return The room ID on success, or null on failure.
+     */
+    public async string? create_encrypted_room (string partner_id) {
+        if (homeserver_url == "" || access_token == "") {
+            return null;
+        }
+
+        try {
+            var url = "%s/_matrix/client/v3/createRoom".printf (
+                strip_trailing_slash (homeserver_url)
+            );
+
+            var builder = new Json.Builder ();
+            builder.begin_object ();
+
+            builder.set_member_name ("visibility");
+            builder.add_string_value ("private");
+
+            builder.set_member_name ("preset");
+            builder.add_string_value ("trusted_private_chat");
+
+            builder.set_member_name ("name");
+            builder.add_string_value ("Vigil Accountability");
+
+            builder.set_member_name ("topic");
+            builder.add_string_value ("Vigil screenshot monitoring");
+
+            builder.set_member_name ("is_direct");
+            builder.add_boolean_value (true);
+
+            // Invite the partner
+            builder.set_member_name ("invite");
+            builder.begin_array ();
+            builder.add_string_value (partner_id);
+            builder.end_array ();
+
+            // Enable encryption from the start
+            builder.set_member_name ("initial_state");
+            builder.begin_array ();
+            builder.begin_object ();
+            builder.set_member_name ("type");
+            builder.add_string_value ("m.room.encryption");
+            builder.set_member_name ("state_key");
+            builder.add_string_value ("");
+            builder.set_member_name ("content");
+            builder.begin_object ();
+            builder.set_member_name ("algorithm");
+            builder.add_string_value ("m.megolm.v1.aes-sha2");
+            builder.end_object ();
+            builder.end_object ();
+            builder.end_array ();
+
+            builder.end_object ();
+
+            var gen = new Json.Generator ();
+            gen.set_root (builder.get_root ());
+            var body_json = gen.to_data (null);
+
+            var message = new Soup.Message ("POST", url);
+            message.set_request_body_from_bytes (
+                "application/json",
+                new Bytes (body_json.data)
+            );
+            message.get_request_headers ().append (
+                "Authorization", "Bearer %s".printf (access_token)
+            );
+
+            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("Matrix room creation failed (HTTP %u): %s", status, resp ?? "");
+                return null;
+            }
+
+            var parser = new Json.Parser ();
+            parser.load_from_data ((string) response_bytes.get_data ());
+            var root = parser.get_root ().get_object ();
+
+            if (root.has_member ("room_id")) {
+                var new_room_id = root.get_string_member ("room_id");
+                room_id = new_room_id;
+                debug ("Created encrypted room: %s", new_room_id);
+                return new_room_id;
+            }
+
+            return null;
+        } catch (Error e) {
+            warning ("Matrix room creation error: %s", e.message);
+            return null;
+        }
+    }
+
+    /**
+     * Upload device keys to the Matrix homeserver for E2EE.
+     *
+     * POST /_matrix/client/v3/keys/upload
+     *
+     * @param keys_json The JSON body from EncryptionService.get_device_keys_json().
+     * @return true if upload succeeded.
+     */
+    public async bool upload_device_keys (string keys_json) {
+        if (homeserver_url == "" || access_token == "") {
+            return false;
+        }
+
+        try {
+            var url = "%s/_matrix/client/v3/keys/upload".printf (
+                strip_trailing_slash (homeserver_url)
+            );
+
+            var message = new Soup.Message ("POST", url);
+            message.set_request_body_from_bytes (
+                "application/json",
+                new Bytes (keys_json.data)
+            );
+            message.get_request_headers ().append (
+                "Authorization", "Bearer %s".printf (access_token)
+            );
+
+            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("Keys upload failed (HTTP %u): %s", status, resp ?? "");
+                return false;
+            }
+
+            debug ("Device keys uploaded successfully");
+            return true;
+        } catch (Error e) {
+            warning ("Keys upload error: %s", e.message);
+            return false;
+        }
+    }
+
+    /**
+     * Query a user's device keys from the homeserver.
+     *
+     * POST /_matrix/client/v3/keys/query
+     *
+     * @param user_id The user whose devices to query.
+     * @return JSON response string, or null on failure.
+     */
+    public async string? query_device_keys (string user_id) {
+        if (homeserver_url == "" || access_token == "") {
+            return null;
+        }
+
+        try {
+            var url = "%s/_matrix/client/v3/keys/query".printf (
+                strip_trailing_slash (homeserver_url)
+            );
+
+            var builder = new Json.Builder ();
+            builder.begin_object ();
+            builder.set_member_name ("device_keys");
+            builder.begin_object ();
+            builder.set_member_name (user_id);
+            builder.begin_array ();
+            builder.end_array (); // empty = all devices
+            builder.end_object ();
+            builder.end_object ();
+
+            var gen = new Json.Generator ();
+            gen.set_root (builder.get_root ());
+            var body_json = gen.to_data (null);
+
+            var message = new Soup.Message ("POST", url);
+            message.set_request_body_from_bytes (
+                "application/json",
+                new Bytes (body_json.data)
+            );
+            message.get_request_headers ().append (
+                "Authorization", "Bearer %s".printf (access_token)
+            );
+
+            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("Keys query failed (HTTP %u): %s", status, resp ?? "");
+                return null;
+            }
+
+            return (string) response_bytes.get_data ();
+        } catch (Error e) {
+            warning ("Keys query error: %s", e.message);
+            return null;
+        }
+    }
+
+    /**
+     * Claim one-time keys for a list of devices.
+     *
+     * POST /_matrix/client/v3/keys/claim
+     *
+     * @param user_id The target user.
+     * @param device_ids Array of device IDs to claim keys for.
+     * @return JSON response string, or null on failure.
+     */
+    public async string? claim_one_time_keys (string user_id, string[] device_ids) {
+        if (homeserver_url == "" || access_token == "") {
+            return null;
+        }
+
+        try {
+            var url = "%s/_matrix/client/v3/keys/claim".printf (
+                strip_trailing_slash (homeserver_url)
+            );
+
+            var builder = new Json.Builder ();
+            builder.begin_object ();
+            builder.set_member_name ("one_time_keys");
+            builder.begin_object ();
+            builder.set_member_name (user_id);
+            builder.begin_object ();
+            foreach (var dev_id in device_ids) {
+                builder.set_member_name (dev_id);
+                builder.add_string_value ("signed_curve25519");
+            }
+            builder.end_object ();
+            builder.end_object ();
+            builder.end_object ();
+
+            var gen = new Json.Generator ();
+            gen.set_root (builder.get_root ());
+            var body_json = gen.to_data (null);
+
+            var message = new Soup.Message ("POST", url);
+            message.set_request_body_from_bytes (
+                "application/json",
+                new Bytes (body_json.data)
+            );
+            message.get_request_headers ().append (
+                "Authorization", "Bearer %s".printf (access_token)
+            );
+
+            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("Keys claim failed (HTTP %u): %s", status, resp ?? "");
+                return null;
+            }
+
+            return (string) response_bytes.get_data ();
+        } catch (Error e) {
+            warning ("Keys claim error: %s", e.message);
+            return null;
+        }
+    }
+
+    /**
+     * Send to-device messages (for sharing Megolm room keys).
+     *
+     * PUT /_matrix/client/v3/sendToDevice/{eventType}/{txnId}
+     *
+     * @param event_type Event type (e.g. "m.room.encrypted").
+     * @param messages_json The JSON messages object { user_id: { device_id: content } }.
+     * @return true if successfully sent.
+     */
+    public async bool send_to_device (string event_type, string messages_json) {
+        if (homeserver_url == "" || access_token == "") {
+            return false;
+        }
+
+        try {
+            var txn_id = generate_txn_id ();
+            var url = "%s/_matrix/client/v3/sendToDevice/%s/%s".printf (
+                strip_trailing_slash (homeserver_url),
+                event_type,
+                txn_id
+            );
+
+            // Wrap in { "messages": ... }
+            var body = "{\"messages\":%s}".printf (messages_json);
+
+            var message = new Soup.Message ("PUT", url);
+            message.set_request_body_from_bytes (
+                "application/json",
+                new Bytes (body.data)
+            );
+            message.get_request_headers ().append (
+                "Authorization", "Bearer %s".printf (access_token)
+            );
+
+            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("To-device send failed (HTTP %u): %s", status, resp ?? "");
+                return false;
+            }
+
+            return true;
+        } catch (Error e) {
+            warning ("To-device send error: %s", e.message);
+            return false;
         }
     }
 
@@ -211,7 +597,9 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
-     * Send a room event (m.room.message) to the configured room.
+     * Send a room event to the configured room.
+     *
+     * If an EncryptionService is set, the event is encrypted before sending.
      *
      * @param event_type The event type (e.g. "m.room.message").
      * @param content_json The JSON content body as a string.
@@ -222,6 +610,20 @@ public class Vigil.Services.MatrixTransportService : Object {
             return null;
         }
 
+        // If E2EE is enabled, encrypt the event
+        string actual_type = event_type;
+        string actual_content = content_json;
+
+        if (encryption != null && encryption.is_ready) {
+            var encrypted = encryption.encrypt_event (room_id, event_type, content_json);
+            if (encrypted != null) {
+                actual_type = "m.room.encrypted";
+                actual_content = encrypted;
+            } else {
+                warning ("E2EE encryption failed, sending unencrypted");
+            }
+        }
+
         try {
             var txn_id = generate_txn_id ();
             var encoded_room = GLib.Uri.escape_string (room_id, null, true);
@@ -229,14 +631,14 @@ public class Vigil.Services.MatrixTransportService : Object {
             var url = "%s/_matrix/client/v3/rooms/%s/send/%s/%s".printf (
                 strip_trailing_slash (homeserver_url),
                 encoded_room,
-                event_type,
+                actual_type,
                 txn_id
             );
 
             var message = new Soup.Message ("PUT", url);
             message.set_request_body_from_bytes (
                 "application/json",
-                new Bytes (content_json.data)
+                new Bytes (actual_content.data)
             );
             message.get_request_headers ().append (
                 "Authorization", "Bearer %s".printf (access_token)
@@ -267,10 +669,6 @@ public class Vigil.Services.MatrixTransportService : Object {
 
     /**
      * Upload and send a screenshot to the Matrix room.
-     *
-     * @param file_path Path to the screenshot PNG file.
-     * @param capture_time When the screenshot was taken.
-     * @return true if successfully sent.
      */
     public async bool send_screenshot (string file_path, DateTime capture_time) {
         if (!is_configured) {
@@ -323,9 +721,6 @@ public class Vigil.Services.MatrixTransportService : Object {
 
     /**
      * Send a text message to the Matrix room (for heartbeats/alerts).
-     *
-     * @param text The message text.
-     * @return true if successfully sent.
      */
     public async bool send_text_message (string text) {
         if (!is_configured) {
@@ -350,10 +745,6 @@ public class Vigil.Services.MatrixTransportService : Object {
 
     /**
      * Send a tamper alert message to the Matrix room.
-     *
-     * @param event_type The type of tamper event.
-     * @param details Description of the issue.
-     * @return true if successfully sent.
      */
     public async bool send_alert (string event_type, string details) {
         var text = "ALERT [%s]: %s".printf (event_type, details);
@@ -362,8 +753,6 @@ public class Vigil.Services.MatrixTransportService : Object {
 
     /**
      * Verify the Matrix connection by calling the /whoami endpoint.
-     *
-     * @return The Matrix user ID if successful, null otherwise.
      */
     public async string? verify_connection () {
         if (homeserver_url == "" || access_token == "") {
@@ -398,6 +787,237 @@ public class Vigil.Services.MatrixTransportService : Object {
         } catch (Error e) {
             warning ("Matrix whoami failed: %s", e.message);
             return null;
+        }
+    }
+
+    /**
+     * Full E2EE setup: upload keys, create Megolm session,
+     * query partner devices, share room keys.
+     *
+     * This is the one-shot setup called from the GUI when the
+     * user clicks "Setup". Inspired by pantalaimon's session
+     * establishment flow.
+     *
+     * @param enc The EncryptionService with initialized OlmAccount.
+     * @param partner_id The partner's Matrix user ID.
+     * @return true if E2EE setup completed successfully.
+     */
+    public async bool setup_e2ee (Vigil.Services.EncryptionService enc, string partner_id) {
+        encryption = enc;
+
+        // Step 1: Upload device keys
+        var keys_json = enc.get_device_keys_json ();
+        bool uploaded = yield upload_device_keys (keys_json);
+        if (!uploaded) {
+            warning ("Failed to upload device keys");
+            return false;
+        }
+        enc.mark_keys_as_published ();
+        debug ("E2EE: device keys uploaded");
+
+        // Step 2: Create Megolm outbound session or restore existing
+        if (!enc.restore_group_session ()) {
+            if (!enc.create_outbound_group_session ()) {
+                warning ("Failed to create Megolm session");
+                return false;
+            }
+        }
+        debug ("E2EE: Megolm session ready (ID: %s)", enc.megolm_session_id);
+
+        // Step 3: Share room keys with partner's devices
+        bool shared = yield share_room_keys (enc, partner_id);
+        if (!shared) {
+            // Key sharing failure is non-fatal - partner may not have
+            // any devices yet (not logged in). Keys will be reshared
+            // when they join.
+            debug ("E2EE: room key sharing deferred (partner may not be online)");
+        } else {
+            debug ("E2EE: room keys shared with partner");
+        }
+
+        return true;
+    }
+
+    /**
+     * Share the Megolm room key with the partner's devices.
+     *
+     * Follows pantalaimon's approach:
+     *   1. Query partner's device keys
+     *   2. Claim one-time keys for each device
+     *   3. Establish Olm sessions and encrypt room key
+     *   4. Send via to-device messages
+     */
+    private async bool share_room_keys (Vigil.Services.EncryptionService enc, string partner_id) {
+        // Query partner's device keys
+        var query_response = yield query_device_keys (partner_id);
+        if (query_response == null) {
+            return false;
+        }
+
+        try {
+            var parser = new Json.Parser ();
+            parser.load_from_data (query_response);
+            var root = parser.get_root ().get_object ();
+
+            if (!root.has_member ("device_keys")) {
+                return false;
+            }
+
+            var dk_obj = root.get_object_member ("device_keys");
+            if (!dk_obj.has_member (partner_id)) {
+                return false;
+            }
+
+            var partner_devices = dk_obj.get_object_member (partner_id);
+            var device_ids = new GenericArray<string> ();
+            var device_curve_keys = new HashTable<string, string> (str_hash, str_equal);
+
+            partner_devices.foreach_member ((obj, dev_id, dev_node) => {
+                var dev = dev_node.get_object ();
+                if (dev.has_member ("keys")) {
+                    var keys = dev.get_object_member ("keys");
+                    var curve_key_name = "curve25519:%s".printf (dev_id);
+                    if (keys.has_member (curve_key_name)) {
+                        device_ids.add (dev_id);
+                        device_curve_keys.insert (
+                            dev_id,
+                            keys.get_string_member (curve_key_name)
+                        );
+                    }
+                }
+            });
+
+            if (device_ids.length == 0) {
+                return false;
+            }
+
+            // Claim one-time keys
+            string[] dev_id_array = new string[device_ids.length];
+            for (int i = 0; i < device_ids.length; i++) {
+                dev_id_array[i] = device_ids[i];
+            }
+
+            var claim_response = yield claim_one_time_keys (partner_id, dev_id_array);
+            if (claim_response == null) {
+                return false;
+            }
+
+            var claim_parser = new Json.Parser ();
+            claim_parser.load_from_data (claim_response);
+            var claim_root = claim_parser.get_root ().get_object ();
+
+            if (!claim_root.has_member ("one_time_keys")) {
+                return false;
+            }
+
+            var otk_obj = claim_root.get_object_member ("one_time_keys");
+            if (!otk_obj.has_member (partner_id)) {
+                return false;
+            }
+
+            var partner_otks = otk_obj.get_object_member (partner_id);
+
+            // Build room key content
+            var room_key_content = enc.build_room_key_content (room_id);
+            if (room_key_content == null) {
+                return false;
+            }
+
+            // Build to-device messages
+            var msg_builder = new Json.Builder ();
+            msg_builder.begin_object ();
+            msg_builder.set_member_name (partner_id);
+            msg_builder.begin_object ();
+
+            int shared_count = 0;
+            partner_otks.foreach_member ((obj, dev_id, otk_node) => {
+                var otk_container = otk_node.get_object ();
+
+                // Find the claimed key
+                string? claimed_key = null;
+                otk_container.foreach_member ((inner_obj, key_name, key_val) => {
+                    if (key_name.has_prefix ("signed_curve25519:")) {
+                        var key_obj = key_val.get_object ();
+                        if (key_obj.has_member ("key")) {
+                            claimed_key = key_obj.get_string_member ("key");
+                        }
+                    }
+                });
+
+                if (claimed_key == null) {
+                    return;
+                }
+
+                var their_curve = device_curve_keys.lookup (dev_id);
+                if (their_curve == null) {
+                    return;
+                }
+
+                // Encrypt room key for this device using Olm
+                var encrypted = enc.olm_encrypt_for_device (
+                    their_curve,
+                    claimed_key,
+                    room_key_content
+                );
+
+                if (encrypted != null) {
+                    // Build the m.room.encrypted to-device content
+                    var dev_builder = new Json.Builder ();
+                    dev_builder.begin_object ();
+                    dev_builder.set_member_name ("algorithm");
+                    dev_builder.add_string_value ("m.olm.v1.curve25519-aes-sha2");
+                    dev_builder.set_member_name ("sender_key");
+                    dev_builder.add_string_value (enc.curve25519_key);
+                    dev_builder.set_member_name ("ciphertext");
+                    dev_builder.begin_object ();
+                    dev_builder.set_member_name (their_curve);
+
+                    try {
+                        var enc_parser = new Json.Parser ();
+                        enc_parser.load_from_data (encrypted);
+                        dev_builder.add_value (enc_parser.get_root ());
+                    } catch (Error e) {
+                        warning ("Failed to parse encrypted content: %s", e.message);
+                        dev_builder.end_object ();
+                        dev_builder.end_object ();
+                        return;
+                    }
+
+                    dev_builder.end_object (); // ciphertext
+                    dev_builder.end_object ();
+
+                    var dev_gen = new Json.Generator ();
+                    dev_gen.set_root (dev_builder.get_root ());
+
+                    msg_builder.set_member_name (dev_id);
+                    try {
+                        var content_parser = new Json.Parser ();
+                        content_parser.load_from_data (dev_gen.to_data (null));
+                        msg_builder.add_value (content_parser.get_root ());
+                    } catch (Error e) {
+                        warning ("Failed to build to-device content: %s", e.message);
+                        return;
+                    }
+
+                    shared_count++;
+                }
+            });
+
+            msg_builder.end_object (); // partner devices
+            msg_builder.end_object ();
+
+            if (shared_count == 0) {
+                return false;
+            }
+
+            var msg_gen = new Json.Generator ();
+            msg_gen.set_root (msg_builder.get_root ());
+            var messages_json = msg_gen.to_data (null);
+
+            return yield send_to_device ("m.room.encrypted", messages_json);
+        } catch (Error e) {
+            warning ("Room key sharing error: %s", e.message);
+            return false;
         }
     }
 }

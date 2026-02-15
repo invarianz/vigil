@@ -9,7 +9,7 @@
  * This is a GApplication (not Gtk.Application) that:
  *   1. Owns the session bus name io.github.invarianz.vigil.Daemon
  *   2. Exports the DBusServer object on the bus
- *   3. Runs the monitoring engine (scheduler, screenshot, Matrix, heartbeat, tamper)
+ *   3. Runs the monitoring engine (scheduler, screenshot, Matrix, E2EE, heartbeat, tamper)
  *   4. Notifies systemd watchdog periodically
  *
  * The daemon runs independently of the GUI. It is started via
@@ -50,9 +50,21 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         _screenshot_svc = new Vigil.Services.ScreenshotService ();
         _scheduler_svc = new Vigil.Services.SchedulerService ();
         _storage_svc = new Vigil.Services.StorageService ();
-        var matrix_svc = new Vigil.Services.MatrixTransportService ();
-        _heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
         var settings = new GLib.Settings ("io.github.invarianz.vigil");
+
+        // Set up Matrix transport with optional E2EE
+        var matrix_svc = new Vigil.Services.MatrixTransportService ();
+        var enc_svc = new Vigil.Services.EncryptionService ();
+
+        // Restore E2EE state if device_id is set (setup was completed)
+        var device_id = settings.get_string ("device-id");
+        if (device_id != "") {
+            enc_svc.device_id = device_id;
+            enc_svc.user_id = ""; // Will be set from access token
+        }
+        matrix_svc.encryption = enc_svc;
+
+        _heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
         _tamper_svc = new Vigil.Services.TamperDetectionService (settings);
 
         _dbus_server = new Vigil.Daemon.DBusServer (

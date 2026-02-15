@@ -4,23 +4,29 @@
  */
 
 /**
- * Settings view for configuring Vigil.
+ * Radically simplified settings view.
  *
- * Covers: Matrix login, homeserver, room ID, screenshot intervals,
- * local retention, and autostart toggle.
+ * The user only needs to provide:
+ *   1. Homeserver (auto-discovered from server name)
+ *   2. Username
+ *   3. Password
+ *   4. Partner's Matrix ID
+ *   5. E2EE password (for encrypting crypto state at rest)
  *
- * The login flow lets users enter username + password directly
- * instead of having to manually obtain an access token via curl.
+ * One "Setup" button does everything: login, create encrypted room,
+ * initialize E2EE, upload device keys, share room keys.
+ *
+ * Schedule/storage/system settings are in a collapsible "Advanced" section.
  */
 public class Vigil.Widgets.SettingsView : Gtk.Box {
 
-    private Gtk.Entry matrix_homeserver_entry;
-    private Gtk.Entry matrix_username_entry;
-    private Gtk.PasswordEntry matrix_password_entry;
-    private Gtk.Button matrix_login_button;
-    private Gtk.Button matrix_test_button;
-    private Gtk.Label matrix_status_label;
-    private Gtk.Entry matrix_room_entry;
+    private Gtk.Entry homeserver_entry;
+    private Gtk.Entry username_entry;
+    private Gtk.PasswordEntry password_entry;
+    private Gtk.Entry partner_entry;
+    private Gtk.PasswordEntry e2ee_password_entry;
+    private Gtk.Button setup_button;
+    private Gtk.Label status_label;
     private Gtk.SpinButton min_interval_spin;
     private Gtk.SpinButton max_interval_spin;
     private Gtk.SpinButton retention_spin;
@@ -44,75 +50,64 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         settings = new GLib.Settings ("io.github.invarianz.vigil");
         _matrix_svc = new Vigil.Services.MatrixTransportService ();
 
-        // --- Matrix section ---
-        var matrix_header = new Granite.HeaderLabel ("Matrix");
+        // --- Account setup section ---
+        var setup_header = new Granite.HeaderLabel ("Account Setup");
 
-        var matrix_hs_label = new Gtk.Label ("Homeserver URL") {
-            halign = Gtk.Align.START
-        };
-        matrix_homeserver_entry = new Gtk.Entry () {
-            placeholder_text = "https://matrix.org or http://localhost:8009 (pantalaimon)",
+        homeserver_entry = new Gtk.Entry () {
+            placeholder_text = "matrix.org",
             hexpand = true
         };
-        settings.bind ("matrix-homeserver-url", matrix_homeserver_entry, "text", SettingsBindFlags.DEFAULT);
+        var existing_hs = settings.get_string ("matrix-homeserver-url");
+        if (existing_hs != "") {
+            homeserver_entry.text = existing_hs;
+        }
 
-        // Login fields (username + password + button)
-        var login_label = new Gtk.Label ("Username") {
-            halign = Gtk.Align.START
-        };
-        matrix_username_entry = new Gtk.Entry () {
+        username_entry = new Gtk.Entry () {
             placeholder_text = "your_username",
             hexpand = true
         };
 
-        var password_label = new Gtk.Label ("Password") {
-            halign = Gtk.Align.START
-        };
-        matrix_password_entry = new Gtk.PasswordEntry () {
+        password_entry = new Gtk.PasswordEntry () {
             show_peek_icon = true,
             hexpand = true
         };
 
-        matrix_login_button = new Gtk.Button.with_label ("Login") {
+        partner_entry = new Gtk.Entry () {
+            placeholder_text = "@partner:matrix.org",
+            hexpand = true
+        };
+        var existing_partner = settings.get_string ("partner-matrix-id");
+        if (existing_partner != "") {
+            partner_entry.text = existing_partner;
+        }
+
+        e2ee_password_entry = new Gtk.PasswordEntry () {
+            show_peek_icon = true,
+            hexpand = true
+        };
+
+        setup_button = new Gtk.Button.with_label ("Setup") {
             halign = Gtk.Align.END
         };
-        matrix_login_button.add_css_class (Granite.STYLE_CLASS_SUGGESTED_ACTION);
-        matrix_login_button.clicked.connect (on_login_clicked);
+        setup_button.add_css_class (Granite.STYLE_CLASS_SUGGESTED_ACTION);
+        setup_button.clicked.connect (on_setup_clicked);
 
-        matrix_test_button = new Gtk.Button.with_label ("Test Connection") {
-            halign = Gtk.Align.END
-        };
-        matrix_test_button.clicked.connect (on_test_clicked);
-
-        matrix_status_label = new Gtk.Label ("") {
+        status_label = new Gtk.Label ("") {
             halign = Gtk.Align.START,
             hexpand = true,
             wrap = true
         };
 
-        // Show existing token status
+        // Show existing status
         var existing_token = settings.get_string ("matrix-access-token");
-        if (existing_token != "") {
-            matrix_status_label.label = "Logged in (token stored)";
-            matrix_status_label.add_css_class ("success");
+        var existing_room = settings.get_string ("matrix-room-id");
+        if (existing_token != "" && existing_room != "") {
+            set_status ("Connected and ready", true);
+        } else if (existing_token != "") {
+            set_status ("Logged in (room not yet created)", false);
         }
 
-        var matrix_room_label = new Gtk.Label ("Room ID") {
-            halign = Gtk.Align.START
-        };
-        matrix_room_entry = new Gtk.Entry () {
-            placeholder_text = "!roomid:matrix.org",
-            hexpand = true
-        };
-        settings.bind ("matrix-room-id", matrix_room_entry, "text", SettingsBindFlags.DEFAULT);
-
-        var button_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8) {
-            halign = Gtk.Align.END
-        };
-        button_box.append (matrix_test_button);
-        button_box.append (matrix_login_button);
-
-        var matrix_grid = new Gtk.Grid () {
+        var setup_grid = new Gtk.Grid () {
             row_spacing = 8,
             column_spacing = 16,
             margin_top = 8,
@@ -120,28 +115,35 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             margin_start = 16,
             margin_end = 16
         };
-        matrix_grid.add_css_class (Granite.STYLE_CLASS_CARD);
+        setup_grid.add_css_class (Granite.STYLE_CLASS_CARD);
 
-        matrix_grid.attach (matrix_hs_label, 0, 0);
-        matrix_grid.attach (matrix_homeserver_entry, 1, 0);
-        matrix_grid.attach (login_label, 0, 1);
-        matrix_grid.attach (matrix_username_entry, 1, 1);
-        matrix_grid.attach (password_label, 0, 2);
-        matrix_grid.attach (matrix_password_entry, 1, 2);
-        matrix_grid.attach (button_box, 1, 3);
-        matrix_grid.attach (matrix_status_label, 0, 4, 2);
-        matrix_grid.attach (matrix_room_label, 0, 5);
-        matrix_grid.attach (matrix_room_entry, 1, 5);
+        var hs_label = new Gtk.Label ("Homeserver") { halign = Gtk.Align.START };
+        var user_label = new Gtk.Label ("Username") { halign = Gtk.Align.START };
+        var pw_label = new Gtk.Label ("Password") { halign = Gtk.Align.START };
+        var partner_label = new Gtk.Label ("Partner Matrix ID") { halign = Gtk.Align.START };
+        var e2ee_label = new Gtk.Label ("E2EE Password") { halign = Gtk.Align.START };
 
-        // --- Schedule section ---
-        var schedule_header = new Granite.HeaderLabel ("Schedule");
+        setup_grid.attach (hs_label, 0, 0);
+        setup_grid.attach (homeserver_entry, 1, 0);
+        setup_grid.attach (user_label, 0, 1);
+        setup_grid.attach (username_entry, 1, 1);
+        setup_grid.attach (pw_label, 0, 2);
+        setup_grid.attach (password_entry, 1, 2);
+        setup_grid.attach (partner_label, 0, 3);
+        setup_grid.attach (partner_entry, 1, 3);
+        setup_grid.attach (e2ee_label, 0, 4);
+        setup_grid.attach (e2ee_password_entry, 1, 4);
+        setup_grid.attach (setup_button, 1, 5);
+        setup_grid.attach (status_label, 0, 6, 2);
+
+        // --- Advanced section (collapsed) ---
+        var advanced_header = new Granite.HeaderLabel ("Advanced");
 
         var min_label = new Gtk.Label ("Minimum interval (minutes)") {
             halign = Gtk.Align.START,
             hexpand = true
         };
         min_interval_spin = new Gtk.SpinButton.with_range (1, 60, 1);
-        // Bind as seconds in GSettings, display as minutes in UI
         var min_seconds = settings.get_int ("min-interval-seconds");
         min_interval_spin.value = min_seconds / 60.0;
         min_interval_spin.value_changed.connect (() => {
@@ -159,46 +161,12 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             settings.set_int ("max-interval-seconds", (int) (max_interval_spin.value * 60));
         });
 
-        var schedule_grid = new Gtk.Grid () {
-            row_spacing = 8,
-            column_spacing = 16,
-            margin_top = 8,
-            margin_bottom = 8,
-            margin_start = 16,
-            margin_end = 16
-        };
-        schedule_grid.add_css_class (Granite.STYLE_CLASS_CARD);
-
-        schedule_grid.attach (min_label, 0, 0);
-        schedule_grid.attach (min_interval_spin, 1, 0);
-        schedule_grid.attach (max_label, 0, 1);
-        schedule_grid.attach (max_interval_spin, 1, 1);
-
-        // --- Storage section ---
-        var storage_header = new Granite.HeaderLabel ("Storage");
-
         var retention_label = new Gtk.Label ("Maximum local screenshots") {
             halign = Gtk.Align.START,
             hexpand = true
         };
         retention_spin = new Gtk.SpinButton.with_range (10, 1000, 10);
         settings.bind ("max-local-screenshots", retention_spin, "value", SettingsBindFlags.DEFAULT);
-
-        var storage_grid = new Gtk.Grid () {
-            row_spacing = 8,
-            column_spacing = 16,
-            margin_top = 8,
-            margin_bottom = 8,
-            margin_start = 16,
-            margin_end = 16
-        };
-        storage_grid.add_css_class (Granite.STYLE_CLASS_CARD);
-
-        storage_grid.attach (retention_label, 0, 0);
-        storage_grid.attach (retention_spin, 1, 0);
-
-        // --- Autostart section ---
-        var system_header = new Granite.HeaderLabel ("System");
 
         var autostart_label = new Gtk.Label ("Start at login") {
             halign = Gtk.Align.START,
@@ -209,7 +177,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         };
         settings.bind ("autostart-enabled", autostart_switch, "active", SettingsBindFlags.DEFAULT);
 
-        var system_grid = new Gtk.Grid () {
+        var advanced_grid = new Gtk.Grid () {
             row_spacing = 8,
             column_spacing = 16,
             margin_top = 8,
@@ -217,87 +185,127 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             margin_start = 16,
             margin_end = 16
         };
-        system_grid.add_css_class (Granite.STYLE_CLASS_CARD);
+        advanced_grid.add_css_class (Granite.STYLE_CLASS_CARD);
 
-        system_grid.attach (autostart_label, 0, 0);
-        system_grid.attach (autostart_switch, 1, 0);
+        advanced_grid.attach (min_label, 0, 0);
+        advanced_grid.attach (min_interval_spin, 1, 0);
+        advanced_grid.attach (max_label, 0, 1);
+        advanced_grid.attach (max_interval_spin, 1, 1);
+        advanced_grid.attach (retention_label, 0, 2);
+        advanced_grid.attach (retention_spin, 1, 2);
+        advanced_grid.attach (autostart_label, 0, 3);
+        advanced_grid.attach (autostart_switch, 1, 3);
 
         // Assemble the view
-        append (matrix_header);
-        append (matrix_grid);
-        append (schedule_header);
-        append (schedule_grid);
-        append (storage_header);
-        append (storage_grid);
-        append (system_header);
-        append (system_grid);
+        append (setup_header);
+        append (setup_grid);
+        append (advanced_header);
+        append (advanced_grid);
     }
 
-    private void on_login_clicked () {
-        var hs_url = matrix_homeserver_entry.text.strip ();
-        var username = matrix_username_entry.text.strip ();
-        var password = matrix_password_entry.text;
+    /**
+     * One-button setup: login, create room, initialize E2EE.
+     */
+    private void on_setup_clicked () {
+        var hs_input = homeserver_entry.text.strip ();
+        var username = username_entry.text.strip ();
+        var password = password_entry.text;
+        var partner_id = partner_entry.text.strip ();
+        var e2ee_password = e2ee_password_entry.text;
 
-        if (hs_url == "" || username == "" || password == "") {
-            set_status ("Please fill in homeserver URL, username, and password", false);
+        if (hs_input == "" || username == "" || password == "") {
+            set_status ("Please fill in homeserver, username, and password", false);
             return;
         }
 
-        matrix_login_button.sensitive = false;
-        set_status ("Logging in...", false);
-
-        _matrix_svc.login.begin (hs_url, username, password, (obj, res) => {
-            var token = _matrix_svc.login.end (res);
-            matrix_login_button.sensitive = true;
-
-            if (token != null) {
-                // Store the token and homeserver URL
-                settings.set_string ("matrix-access-token", token);
-                settings.set_string ("matrix-homeserver-url", hs_url);
-
-                // Clear password from the field
-                matrix_password_entry.text = "";
-
-                set_status ("Login successful", true);
-            } else {
-                set_status ("Login failed -- check credentials and homeserver URL", false);
-            }
-        });
-    }
-
-    private void on_test_clicked () {
-        // Use stored token for verification
-        _matrix_svc.homeserver_url = settings.get_string ("matrix-homeserver-url");
-        _matrix_svc.access_token = settings.get_string ("matrix-access-token");
-
-        if (_matrix_svc.homeserver_url == "" || _matrix_svc.access_token == "") {
-            set_status ("Log in first or configure a homeserver and token", false);
+        if (partner_id == "" || !partner_id.has_prefix ("@")) {
+            set_status ("Please enter the partner's Matrix ID (e.g. @partner:matrix.org)", false);
             return;
         }
 
-        matrix_test_button.sensitive = false;
-        set_status ("Testing connection...", false);
+        if (e2ee_password == "") {
+            set_status ("Please set an E2EE password to protect your encryption keys", false);
+            return;
+        }
 
-        _matrix_svc.verify_connection.begin ((obj, res) => {
-            var user_id = _matrix_svc.verify_connection.end (res);
-            matrix_test_button.sensitive = true;
+        setup_button.sensitive = false;
+        set_status ("Discovering homeserver...", false);
 
-            if (user_id != null) {
-                set_status ("Connected as %s".printf (user_id), true);
-            } else {
-                set_status ("Connection failed -- check homeserver and token", false);
-            }
-        });
+        run_setup.begin (hs_input, username, password, partner_id, e2ee_password);
+    }
+
+    private async void run_setup (string hs_input, string username, string password,
+                                   string partner_id, string e2ee_password) {
+        // Step 1: Discover homeserver
+        var hs_url = yield _matrix_svc.discover_homeserver (hs_input);
+        if (hs_url == null) {
+            set_status ("Failed to discover homeserver", false);
+            setup_button.sensitive = true;
+            return;
+        }
+        set_status ("Logging in to %s...".printf (hs_url), false);
+
+        // Step 2: Login
+        var token = yield _matrix_svc.login (hs_url, username, password);
+        if (token == null) {
+            set_status ("Login failed -- check credentials", false);
+            setup_button.sensitive = true;
+            return;
+        }
+
+        // Save credentials
+        settings.set_string ("matrix-homeserver-url", hs_url);
+        settings.set_string ("matrix-access-token", token);
+        settings.set_string ("partner-matrix-id", partner_id);
+        set_status ("Creating encrypted room...", false);
+
+        // Step 3: Create encrypted room with partner
+        var new_room_id = yield _matrix_svc.create_encrypted_room (partner_id);
+        if (new_room_id == null) {
+            set_status ("Room creation failed -- is the partner ID correct?", false);
+            setup_button.sensitive = true;
+            return;
+        }
+        settings.set_string ("matrix-room-id", new_room_id);
+        set_status ("Setting up E2EE...", false);
+
+        // Step 4: Initialize E2EE
+        var enc_svc = new Vigil.Services.EncryptionService ();
+        enc_svc.user_id = _matrix_svc.last_user_id;
+        enc_svc.device_id = _matrix_svc.last_device_id;
+        settings.set_string ("device-id", _matrix_svc.last_device_id);
+
+        if (!enc_svc.initialize (e2ee_password)) {
+            set_status ("E2EE initialization failed", false);
+            setup_button.sensitive = true;
+            return;
+        }
+
+        // Step 5: Full E2EE setup (upload keys, create Megolm session, share)
+        bool e2ee_ok = yield _matrix_svc.setup_e2ee (enc_svc, partner_id);
+
+        // Clear password fields
+        password_entry.text = "";
+        e2ee_password_entry.text = "";
+
+        setup_button.sensitive = true;
+
+        if (e2ee_ok) {
+            set_status ("Setup complete -- monitoring ready", true);
+        } else {
+            // Partial success - login and room created but E2EE had issues
+            set_status ("Setup mostly complete -- E2EE key sharing deferred until partner is online", true);
+        }
     }
 
     private void set_status (string message, bool success) {
-        matrix_status_label.label = message;
-        matrix_status_label.remove_css_class ("success");
-        matrix_status_label.remove_css_class ("error");
+        status_label.label = message;
+        status_label.remove_css_class ("success");
+        status_label.remove_css_class ("error");
         if (success) {
-            matrix_status_label.add_css_class ("success");
+            status_label.add_css_class ("success");
         } else if (message != "") {
-            matrix_status_label.add_css_class ("error");
+            status_label.add_css_class ("error");
         }
     }
 }
