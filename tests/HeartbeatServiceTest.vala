@@ -103,6 +103,51 @@ void test_report_tamper_event () {
     assert_true (msg.contains ("test event 2"));
 }
 
+void test_consecutive_failures_tracked () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    assert_true (svc.consecutive_failures == 0);
+
+    // Without a Matrix service, send will fail
+    var loop = new MainLoop ();
+    svc.send_heartbeat.begin ((obj, res) => {
+        svc.send_heartbeat.end (res);
+        loop.quit ();
+    });
+    Timeout.add (100, () => { loop.quit (); return Source.REMOVE; });
+    loop.run ();
+
+    // After a failure, consecutive_failures should not increment
+    // because the "not configured" path doesn't count as a network failure
+    // (it returns before attempting send)
+    assert_true (svc.consecutive_failures == 0);
+}
+
+void test_gap_detection_in_message () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.interval_seconds = 1;
+
+    // Start the service to initialize _last_heartbeat_monotonic
+    svc.start ();
+    svc.stop ();
+
+    // Normal message (no gap) should not contain "resumed"
+    var msg = svc.build_heartbeat_message ();
+    assert_false (msg.contains ("resumed"));
+}
+
+void test_offline_notice_without_matrix () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    // Should not crash when Matrix is null
+    var loop = new MainLoop ();
+    svc.send_offline_notice.begin ((obj, res) => {
+        svc.send_offline_notice.end (res);
+        loop.quit ();
+    });
+    Timeout.add (100, () => { loop.quit (); return Source.REMOVE; });
+    loop.run ();
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -124,6 +169,12 @@ public static int main (string[] args) {
         test_default_interval);
     Test.add_func ("/heartbeat/report_tamper_event",
         test_report_tamper_event);
+    Test.add_func ("/heartbeat/consecutive_failures",
+        test_consecutive_failures_tracked);
+    Test.add_func ("/heartbeat/gap_detection",
+        test_gap_detection_in_message);
+    Test.add_func ("/heartbeat/offline_notice_no_matrix",
+        test_offline_notice_without_matrix);
 
     return Test.run ();
 }

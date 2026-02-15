@@ -95,9 +95,13 @@ public class Vigil.Services.MatrixTransportService : Object {
     public async string? discover_homeserver (string server_name) {
         var name = server_name.strip ();
 
-        // If it's already a full URL, use it directly
-        if (name.has_prefix ("http://") || name.has_prefix ("https://")) {
+        // If it's already a full URL, validate and use it directly
+        if (name.has_prefix ("https://")) {
             return strip_trailing_slash (name);
+        }
+        if (name.has_prefix ("http://")) {
+            warning ("Refusing insecure http:// homeserver URL. Use https:// instead.");
+            return null;
         }
 
         // Try .well-known discovery
@@ -117,6 +121,10 @@ public class Vigil.Services.MatrixTransportService : Object {
                     var hs_obj = root.get_object_member ("m.homeserver");
                     if (hs_obj.has_member ("base_url")) {
                         var url = hs_obj.get_string_member ("base_url");
+                        if (!url.has_prefix ("https://")) {
+                            warning ("Discovered homeserver URL is not HTTPS: %s", url);
+                            return null;
+                        }
                         debug ("Discovered homeserver: %s -> %s", name, url);
                         return strip_trailing_slash (url);
                     }

@@ -191,6 +191,27 @@ void test_login_fails_with_bad_url () {
     assert_true (token == null);
 }
 
+void test_discover_rejects_http_url () {
+    var svc = new Vigil.Services.MatrixTransportService ();
+
+    string? result = null;
+    var loop = new MainLoop ();
+
+    // http:// URLs should be rejected
+    Test.expect_message (null, LogLevelFlags.LEVEL_WARNING,
+        "*Refusing insecure http://*");
+
+    svc.discover_homeserver.begin ("http://evil.example.com", (obj, res) => {
+        result = svc.discover_homeserver.end (res);
+        loop.quit ();
+    });
+    Timeout.add (500, () => { loop.quit (); return Source.REMOVE; });
+    loop.run ();
+
+    Test.assert_expected_messages ();
+    assert_true (result == null);
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -208,6 +229,7 @@ public static int main (string[] args) {
     Test.add_func ("/matrix/encryption_property", test_encryption_property);
     Test.add_func ("/matrix/last_user_id_default", test_last_user_id_default);
     Test.add_func ("/matrix/create_room_unconfigured", test_create_room_fails_unconfigured);
+    Test.add_func ("/matrix/discover_rejects_http", test_discover_rejects_http_url);
 
     return Test.run ();
 }

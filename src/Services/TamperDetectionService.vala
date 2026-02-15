@@ -107,7 +107,11 @@ public class Vigil.Services.TamperDetectionService : Object {
             return "no-settings";
         }
 
-        var data = "%s|%s|%s|%d|%d|%d|%b|%s|%s".printf (
+        // Hash a "is-set" sentinel for the pickle key rather than the raw
+        // secret, to avoid passing the key through unnecessary code paths.
+        var pickle_key_set = _settings.get_string ("e2ee-pickle-key") != "";
+
+        var data = "%s|%s|%s|%d|%d|%d|%b|%s|%b".printf (
             _settings.get_string ("matrix-homeserver-url"),
             _settings.get_string ("matrix-access-token"),
             _settings.get_string ("matrix-room-id"),
@@ -116,7 +120,7 @@ public class Vigil.Services.TamperDetectionService : Object {
             _settings.get_int ("max-local-screenshots"),
             _settings.get_boolean ("monitoring-enabled"),
             _settings.get_string ("device-id"),
-            _settings.get_string ("e2ee-pickle-key")
+            pickle_key_set
         );
 
         return Checksum.compute_for_string (ChecksumType.SHA256, data);

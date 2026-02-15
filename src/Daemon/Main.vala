@@ -173,7 +173,19 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
             _watchdog_source = 0;
         }
 
+        // Send "going offline" notice so the partner knows silence is expected
         if (_heartbeat_svc != null) {
+            // Run the async send synchronously within a brief main loop spin.
+            // systemd gives us a generous shutdown timeout (DefaultTimeoutStopSec).
+            var loop = new MainLoop (null, false);
+            _heartbeat_svc.send_offline_notice.begin ((obj, res) => {
+                _heartbeat_svc.send_offline_notice.end (res);
+                loop.quit ();
+            });
+            // Spin for at most 5 seconds, then give up
+            Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });
+            loop.run ();
+
             _heartbeat_svc.stop ();
         }
         if (_tamper_svc != null) {

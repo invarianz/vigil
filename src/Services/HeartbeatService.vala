@@ -11,8 +11,19 @@
  * Silence itself is the signal -- this handles kill, uninstall, network
  * block, and every other "make it stop running" attack.
  *
- * Heartbeats include system health info so the partner can detect
- * configuration tampering even when the daemon is still running.
+ * Sleep/wake awareness:
+ *   Each heartbeat records a monotonic timestamp. On the next tick, if the
+ *   wall-clock gap exceeds 2x the expected interval, the device was likely
+ *   asleep or the network was down. The heartbeat message reports the gap
+ *   so the partner can distinguish sleep from tampering.
+ *
+ * Clean shutdown:
+ *   When the daemon shuts down gracefully (systemd stop, reboot), it sends
+ *   a "going offline" message so the partner knows silence is expected.
+ *
+ * Network failure:
+ *   Consecutive send failures are tracked. On recovery, the heartbeat
+ *   reports how many were missed so the partner knows there was a gap.
  */
 public class Vigil.Services.HeartbeatService : Object {
 
@@ -43,11 +54,17 @@ public class Vigil.Services.HeartbeatService : Object {
     /** Hash of current configuration for tamper detection. */
     public string config_hash { get; set; default = ""; }
 
+    /** Number of consecutive heartbeat send failures. */
+    public int consecutive_failures { get; private set; default = 0; }
+
     /** List of tamper events since last heartbeat. */
     private GenericArray<string> _tamper_events;
 
     private Vigil.Services.MatrixTransportService? _matrix_svc;
     private uint _timeout_source = 0;
+
+    /** Monotonic timestamp (usec) of last successful or attempted heartbeat. */
+    private int64 _last_heartbeat_monotonic = 0;
 
     /**
      * Create a HeartbeatService.
@@ -81,6 +98,7 @@ public class Vigil.Services.HeartbeatService : Object {
 
         is_running = true;
         start_time = new DateTime.now_local ();
+        _last_heartbeat_monotonic = GLib.get_monotonic_time ();
 
         // Send first heartbeat immediately
         send_heartbeat.begin ();
@@ -104,6 +122,30 @@ public class Vigil.Services.HeartbeatService : Object {
     }
 
     /**
+     * Send a "going offline" message before clean shutdown.
+     *
+     * This tells the accountability partner that upcoming silence is
+     * expected (device shutting down or daemon stopping), rather than
+     * suspicious. The partner can still be alerted if silence extends
+     * beyond a reasonable window.
+     */
+    public async void send_offline_notice () {
+        if (_matrix_svc == null || !_matrix_svc.is_configured) {
+            return;
+        }
+
+        var uptime = get_uptime_seconds ();
+        var hours = uptime / 3600;
+        var minutes = (uptime % 3600) / 60;
+
+        var message = "Vigil going offline (clean shutdown) | uptime was: %lldh %lldm | pending: %d".printf (
+            hours, minutes, pending_upload_count
+        );
+
+        yield _matrix_svc.send_text_message (message);
+    }
+
+    /**
      * Calculate uptime in seconds since daemon start.
      */
     public int64 get_uptime_seconds () {
@@ -113,6 +155,9 @@ public class Vigil.Services.HeartbeatService : Object {
 
     /**
      * Build a human-readable heartbeat message for the Matrix room.
+     *
+     * Includes gap detection (sleep/wake), recovery info (consecutive
+     * failures), and tamper events.
      */
     public string build_heartbeat_message () {
         var uptime = get_uptime_seconds ();
@@ -123,6 +168,24 @@ public class Vigil.Services.HeartbeatService : Object {
         sb.append ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d".printf (
             hours, minutes, screenshots_since_last, pending_upload_count
         ));
+
+        // Detect gap (sleep/wake or network outage recovery)
+        var now_mono = GLib.get_monotonic_time ();
+        if (_last_heartbeat_monotonic > 0) {
+            var elapsed_sec = (now_mono - _last_heartbeat_monotonic) / 1000000;
+            var expected_sec = (int64) interval_seconds;
+
+            // If elapsed is more than 2x the interval, there was a gap
+            if (elapsed_sec > expected_sec * 2) {
+                var gap_min = elapsed_sec / 60;
+                sb.append (" | resumed after %lldm gap (sleep/network)".printf (gap_min));
+            }
+        }
+
+        // Report recovery from consecutive failures
+        if (consecutive_failures > 0) {
+            sb.append (" | recovering: %d heartbeats were missed".printf (consecutive_failures));
+        }
 
         if (_tamper_events.length > 0) {
             sb.append ("\nTamper events:");
@@ -147,11 +210,14 @@ public class Vigil.Services.HeartbeatService : Object {
         var sent = yield _matrix_svc.send_text_message (message);
 
         if (sent) {
+            consecutive_failures = 0;
             screenshots_since_last = 0;
             _tamper_events.remove_range (0, _tamper_events.length);
+            _last_heartbeat_monotonic = GLib.get_monotonic_time ();
             heartbeat_sent (new DateTime.now_local ());
             return true;
         } else {
+            consecutive_failures++;
             heartbeat_failed ("Failed to send heartbeat via Matrix");
             return false;
         }
