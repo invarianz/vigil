@@ -1,12 +1,15 @@
 /*
- * Minimal VAPI bindings for OpenSSL EVP cipher API.
+ * Minimal VAPI bindings for OpenSSL EVP cipher and digest APIs.
  *
- * Only the functions needed for AES-256-CTR (Matrix encrypted
- * attachments) are bound here.
+ * Binds only the functions needed for:
+ *   - AES-256-CTR encryption (Matrix encrypted attachments)
+ *   - SHA-256 hashing (ciphertext integrity hash)
  */
 
 [CCode (cheader_filename = "openssl/evp.h")]
 namespace OpenSSL {
+
+    /* ───── Cipher (AES-256-CTR) ───── */
 
     [CCode (cname = "EVP_CIPHER", has_type_id = false)]
     [Compact]
@@ -40,4 +43,26 @@ namespace OpenSSL {
         [CCode (cname = "EVP_CIPHER_CTX_set_padding")]
         public int set_padding (int pad);
     }
+
+    /* ───── Digest (SHA-256) ───── */
+
+    [CCode (cname = "EVP_MD", has_type_id = false)]
+    [Compact]
+    public class Md {
+    }
+
+    [CCode (cname = "EVP_sha256")]
+    public unowned Md sha256 ();
+
+    /**
+     * One-shot digest: hash data directly into md (caller-allocated).
+     * Returns 1 on success, 0 on failure.
+     */
+    [CCode (cname = "EVP_Digest")]
+    public int digest ([CCode (array_length = false)] uint8[] data,
+                       size_t count,
+                       [CCode (array_length = false)] uint8[] md,
+                       out uint md_size,
+                       Md type,
+                       void* engine = null);
 }

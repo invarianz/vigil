@@ -7,14 +7,21 @@
  * Performance benchmarks for Vigil's hot paths.
  *
  * Measures wall-clock time for:
- *   1. Random number generation (/dev/urandom open+read+close)
- *   2. Megolm encryption (encrypt + pickle-save per message)
- *   3. encrypt_event full path (JSON build + Megolm + JSON build)
- *   4. StorageService.get_pending_screenshots (directory scan)
- *   5. StorageService.cleanup_old_screenshots (scan + sort + delete)
- *   6. StorageService.mark_pending + mark_uploaded cycle
- *   7. TamperDetectionService.compute_config_hash
- *   8. Full capture pipeline simulation (sans network)
+ *   1.  Random number generation (/dev/urandom open+read+close vs cached fd)
+ *   2.  Ed25519 signing
+ *   3.  Megolm encryption (with deferred pickle save)
+ *   4.  encrypt_event full path (JSON build + Megolm + JSON build)
+ *   5.  AES-256-CTR encrypt_attachment at various sizes (1KB, 100KB, 2MB)
+ *   6.  SHA-256 of ciphertext (inside encrypt_attachment)
+ *   7.  base64url encoding (key/IV serialization)
+ *   8.  Encrypted event JSON build (the JWK/EncryptedFile envelope)
+ *   9.  StorageService mark_pending / mark_uploaded cycle
+ *   10. StorageService get_pending_screenshots (0, 50, 200 files)
+ *   11. StorageService cleanup_old_screenshots (100 files)
+ *   12. Pending count: cached vs directory scan
+ *   13. File read (2MB sync)
+ *   14. TamperDetectionService.compute_config_hash
+ *   15. Full encrypted pipeline simulation (sans network)
  *
  * Run with: ./PerformanceBenchmark_test
  * Each benchmark prints: operation, iterations, total_us, per_op_us
@@ -40,10 +47,10 @@ void bench (string name, int iterations, BenchBody body) {
     }
 
     timer.stop ();
-    double elapsed = timer.elapsed () * 1000000.0; // seconds -> microseconds
+    double elapsed = timer.elapsed () * 1000000.0; // seconds → microseconds
     double per_op = elapsed / iterations;
 
-    print ("%-45s %6d iterations %10.0f us total %8.1f us/op\n",
+    print ("%-50s %6d iters %10.0f us total %8.1f us/op\n",
            name, iterations, elapsed, per_op);
 }
 
@@ -54,7 +61,19 @@ void clean_crypto_dir () {
     FileUtils.remove (megolm_pickle);
 }
 
-/* ─── Benchmark: /dev/urandom ─── */
+Vigil.Services.EncryptionService make_enc_service () {
+    clean_crypto_dir ();
+    var svc = new Vigil.Services.EncryptionService ();
+    svc.user_id = "@bench:test";
+    svc.device_id = "BENCHDEV";
+    svc.initialize ("bench-key");
+    svc.create_outbound_group_session ();
+    return svc;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Section 1: Random Number Generation
+ * ════════════════════════════════════════════════════════════════════════════ */
 
 void bench_urandom_open_read_close () {
     bench ("urandom open+read(32)+close", 1000, () => {
@@ -65,9 +84,7 @@ void bench_urandom_open_read_close () {
             size_t bytes_read;
             stream.read_all (buf, out bytes_read, null);
             stream.close (null);
-        } catch (Error e) {
-            // ignore
-        }
+        } catch (Error e) {}
     });
 }
 
@@ -76,50 +93,83 @@ void bench_urandom_cached_fd () {
     try {
         var file = File.new_for_path ("/dev/urandom");
         cached_stream = file.read (null);
-    } catch (Error e) {
-        return;
-    }
+    } catch (Error e) { return; }
 
     bench ("urandom cached-fd read(32)", 1000, () => {
         try {
             var buf = new uint8[32];
             size_t bytes_read;
             cached_stream.read_all (buf, out bytes_read, null);
-        } catch (Error e) {
-            // ignore
-        }
+        } catch (Error e) {}
     });
 
     try { cached_stream.close (null); } catch (Error e) {}
 }
 
-/* ─── Benchmark: Megolm encrypt ─── */
+void bench_urandom_cached_fd_48 () {
+    // 48 bytes = 32 (AES key) + 16 (IV) -- what encrypt_attachment needs
+    FileInputStream? cached_stream = null;
+    try {
+        var file = File.new_for_path ("/dev/urandom");
+        cached_stream = file.read (null);
+    } catch (Error e) { return; }
 
-void bench_megolm_encrypt () {
+    bench ("urandom cached-fd read(48) [key+IV]", 1000, () => {
+        try {
+            var buf = new uint8[48];
+            size_t bytes_read;
+            cached_stream.read_all (buf, out bytes_read, null);
+        } catch (Error e) {}
+    });
+
+    try { cached_stream.close (null); } catch (Error e) {}
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Section 2: Olm/Megolm Encryption
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+void bench_sign_string () {
     clean_crypto_dir ();
     var svc = new Vigil.Services.EncryptionService ();
     svc.user_id = "@bench:test";
     svc.device_id = "BENCHDEV";
     svc.initialize ("bench-key");
-    svc.create_outbound_group_session ();
 
+    var message = "{\"algorithms\":[\"m.olm.v1\",\"m.megolm.v1\"],\"device_id\":\"BENCHDEV\"}";
+
+    bench ("sign_string (Ed25519)", 2000, () => {
+        svc.sign_string (message);
+    });
+
+    svc.cleanup ();
+}
+
+void bench_megolm_encrypt () {
+    var svc = make_enc_service ();
     var plaintext = "{\"msgtype\":\"m.text\",\"body\":\"benchmark message payload here\"}";
 
-    bench ("megolm_encrypt (includes pickle save)", 500, () => {
+    bench ("megolm_encrypt (deferred pickle)", 500, () => {
         svc.megolm_encrypt (plaintext);
     });
 
     svc.cleanup ();
 }
 
-void bench_encrypt_event () {
-    clean_crypto_dir ();
-    var svc = new Vigil.Services.EncryptionService ();
-    svc.user_id = "@bench:test";
-    svc.device_id = "BENCHDEV";
-    svc.initialize ("bench-key");
-    svc.create_outbound_group_session ();
+void bench_megolm_encrypt_plus_save () {
+    var svc = make_enc_service ();
+    var plaintext = "{\"msgtype\":\"m.text\",\"body\":\"benchmark message payload here\"}";
 
+    bench ("megolm_encrypt + save_session_if_needed", 500, () => {
+        svc.megolm_encrypt (plaintext);
+        svc.save_session_if_needed ();
+    });
+
+    svc.cleanup ();
+}
+
+void bench_encrypt_event () {
+    var svc = make_enc_service ();
     var content = "{\"msgtype\":\"m.image\",\"body\":\"Screenshot 2025-01-01\",\"url\":\"mxc://test/abc\",\"info\":{\"mimetype\":\"image/png\"}}";
 
     bench ("encrypt_event (JSON + Megolm + JSON)", 500, () => {
@@ -129,7 +179,128 @@ void bench_encrypt_event () {
     svc.cleanup ();
 }
 
-/* ─── Benchmark: Storage operations ─── */
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Section 3: AES-256-CTR Attachment Encryption
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+void bench_encrypt_attachment_1kb () {
+    var svc = make_enc_service ();
+    var data = new uint8[1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("encrypt_attachment (1 KB)", 1000, () => {
+        svc.encrypt_attachment (data);
+    });
+
+    svc.cleanup ();
+}
+
+void bench_encrypt_attachment_100kb () {
+    var svc = make_enc_service ();
+    var data = new uint8[100 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("encrypt_attachment (100 KB)", 500, () => {
+        svc.encrypt_attachment (data);
+    });
+
+    svc.cleanup ();
+}
+
+void bench_encrypt_attachment_2mb () {
+    var svc = make_enc_service ();
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("encrypt_attachment (2 MB)", 50, () => {
+        svc.encrypt_attachment (data);
+    });
+
+    svc.cleanup ();
+}
+
+/* Isolate SHA-256 cost */
+void bench_sha256_2mb () {
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("SHA-256 of 2 MB (GLib.Checksum)", 100, () => {
+        var cs = new Checksum (ChecksumType.SHA256);
+        cs.update (data, data.length);
+        cs.get_string ();
+    });
+}
+
+/* Isolate the hex-to-bytes conversion */
+void bench_sha256_hex_to_bytes () {
+    var hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    bench ("SHA-256 hex→bytes (32 × uint64.parse)", 5000, () => {
+        var sha256 = new uint8[32];
+        for (int i = 0; i < 32; i++) {
+            sha256[i] = (uint8) uint64.parse (hex.substring (i * 2, 2), 16);
+        }
+    });
+}
+
+/* Isolate AES-CTR cost (no random gen, no SHA, no copy) */
+void bench_aes_ctr_raw_2mb () {
+    var key = new uint8[32];
+    var iv = new uint8[16];
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("AES-256-CTR raw encrypt 2 MB (OpenSSL)", 50, () => {
+        var ctx = new OpenSSL.CipherCtx ();
+        ctx.encrypt_init (OpenSSL.aes_256_ctr (), null, key, iv);
+        ctx.set_padding (0);
+        var out_buf = new uint8[data.length + 16];
+        int out_len, final_len;
+        ctx.encrypt_update (out_buf, out out_len, data, data.length);
+        ctx.encrypt_final (out_buf[out_len:out_buf.length], out final_len);
+    });
+}
+
+/* Isolate Memory.copy cost */
+void bench_memcpy_2mb () {
+    var src = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < src.length; i++) src[i] = (uint8)(i & 0xFF);
+
+    bench ("Memory.copy 2 MB", 200, () => {
+        var dst = new uint8[src.length];
+        Memory.copy (dst, src, src.length);
+    });
+}
+
+/* base64url encode 32 bytes (AES key size) */
+void bench_base64url_encode () {
+    var data = new uint8[32];
+    for (int i = 0; i < 32; i++) data[i] = (uint8)(i * 7);
+
+    bench ("base64url_encode_unpadded (32 B)", 5000, () => {
+        Vigil.Services.EncryptionService.base64url_encode_unpadded (data);
+    });
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Section 4: Storage Operations
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+void bench_storage_mark_cycle () {
+    var dir = Path.build_filename (bench_data_dir, "storage-bench-cycle");
+    DirUtils.create_with_parents (dir, 0755);
+    var store = new Vigil.Services.StorageService (dir);
+    try { store.initialize (); } catch (Error e) {}
+
+    int idx = 0;
+    bench ("mark_pending + mark_uploaded cycle", 500, () => {
+        var path = Path.build_filename (store.screenshots_dir, "cycle_%06d.png".printf (idx));
+        try { FileUtils.set_contents (path, "x"); } catch (Error e) {}
+        try { store.mark_pending (path); } catch (Error e) {}
+        store.mark_uploaded (path);
+        idx++;
+    });
+}
 
 void bench_storage_pending_scan_empty () {
     var dir = Path.build_filename (bench_data_dir, "storage-bench-empty");
@@ -148,7 +319,6 @@ void bench_storage_pending_scan_50 () {
     var store = new Vigil.Services.StorageService (dir);
     try { store.initialize (); } catch (Error e) {}
 
-    // Create 50 pending screenshots
     for (int i = 0; i < 50; i++) {
         var path = Path.build_filename (store.screenshots_dir, "bench_%04d.png".printf (i));
         try { FileUtils.set_contents (path, "fake-png-data"); } catch (Error e) {}
@@ -166,7 +336,6 @@ void bench_storage_pending_scan_200 () {
     var store = new Vigil.Services.StorageService (dir);
     try { store.initialize (); } catch (Error e) {}
 
-    // Create 200 pending screenshots
     for (int i = 0; i < 200; i++) {
         var path = Path.build_filename (store.screenshots_dir, "bench_%04d.png".printf (i));
         try { FileUtils.set_contents (path, "fake-png-data"); } catch (Error e) {}
@@ -178,20 +347,23 @@ void bench_storage_pending_scan_200 () {
     });
 }
 
-void bench_storage_mark_cycle () {
-    var dir = Path.build_filename (bench_data_dir, "storage-bench-cycle");
+/* Cached pending_count vs full directory scan */
+void bench_pending_count_cached () {
+    var dir = Path.build_filename (bench_data_dir, "storage-bench-cached-cnt");
     DirUtils.create_with_parents (dir, 0755);
     var store = new Vigil.Services.StorageService (dir);
     try { store.initialize (); } catch (Error e) {}
 
-    int idx = 0;
-    bench ("mark_pending + mark_uploaded cycle", 500, () => {
-        var path = Path.build_filename (store.screenshots_dir, "cycle_%06d.png".printf (idx));
-        try { FileUtils.set_contents (path, "x"); } catch (Error e) {}
+    for (int i = 0; i < 50; i++) {
+        var path = Path.build_filename (store.screenshots_dir, "bench_%04d.png".printf (i));
+        try { FileUtils.set_contents (path, "fake-png-data"); } catch (Error e) {}
         try { store.mark_pending (path); } catch (Error e) {}
-        store.mark_uploaded (path);
-        FileUtils.remove (path);
-        idx++;
+    }
+    // Prime the cache
+    store.get_pending_screenshots ();
+
+    bench ("pending_count (cached, O(1))", 10000, () => {
+        var _ = store.pending_count;
     });
 }
 
@@ -212,7 +384,45 @@ void bench_storage_cleanup_100 () {
     });
 }
 
-/* ─── Benchmark: Config hash ─── */
+void bench_storage_cleanup_below_limit () {
+    var dir = Path.build_filename (bench_data_dir, "storage-bench-cleanup-fast");
+    DirUtils.create_with_parents (dir, 0755);
+    var store = new Vigil.Services.StorageService (dir);
+    store.max_local_screenshots = 100;
+    try { store.initialize (); } catch (Error e) {}
+
+    // Create 10 files (well below limit of 100)
+    for (int i = 0; i < 10; i++) {
+        var path = Path.build_filename (store.screenshots_dir, "fast_%04d.png".printf (i));
+        try { FileUtils.set_contents (path, "fake"); } catch (Error e) {}
+    }
+    // Prime the _screenshot_file_count cache
+    store.cleanup_old_screenshots ();
+
+    bench ("cleanup_old_screenshots (below limit, fast path)", 5000, () => {
+        store.cleanup_old_screenshots ();
+    });
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Section 5: I/O
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+void bench_file_read_2mb () {
+    var fake_path = Path.build_filename (bench_data_dir, "fake_2mb.png");
+    var buf = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < buf.length; i++) buf[i] = (uint8) (i & 0xFF);
+    try { FileUtils.set_data (fake_path, buf); } catch (Error e) { return; }
+
+    bench ("read 2 MB file into memory (sync)", 100, () => {
+        try {
+            uint8[] contents;
+            FileUtils.get_data (fake_path, out contents);
+        } catch (Error e) {}
+    });
+
+    FileUtils.remove (fake_path);
+}
 
 void bench_config_hash () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
@@ -223,7 +433,9 @@ void bench_config_hash () {
     });
 }
 
-/* ─── Benchmark: Full capture pipeline (no network) ─── */
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Section 6: Full Pipeline (no network)
+ * ════════════════════════════════════════════════════════════════════════════ */
 
 void bench_full_pipeline_no_network () {
     // Simulates: generate_path → mark_pending → encrypt_event → mark_uploaded → cleanup
@@ -232,74 +444,105 @@ void bench_full_pipeline_no_network () {
     var store = new Vigil.Services.StorageService (dir);
     try { store.initialize (); } catch (Error e) {}
 
-    clean_crypto_dir ();
-    var enc = new Vigil.Services.EncryptionService ();
-    enc.user_id = "@bench:test";
-    enc.device_id = "BENCHDEV";
-    enc.initialize ("bench-key");
-    enc.create_outbound_group_session ();
-
+    var enc = make_enc_service ();
     var content = "{\"msgtype\":\"m.image\",\"body\":\"Screenshot\",\"url\":\"mxc://test/abc\",\"info\":{\"mimetype\":\"image/png\"}}";
 
-    bench ("full pipeline (no network)", 200, () => {
-        // 1. Generate path
+    bench ("pipeline: event-only (no attachment enc)", 200, () => {
         var path = store.generate_screenshot_path ();
-        // 2. Fake screenshot file
         try { FileUtils.set_contents (path, "fake-png-data-for-benchmarking"); } catch (Error e) {}
-        // 3. Mark pending
         try { store.mark_pending (path); } catch (Error e) {}
-        // 4. Encrypt
         enc.encrypt_event ("!room:test", "m.room.message", content);
-        // 5. Mark uploaded
         store.mark_uploaded (path);
-        // 6. Cleanup
         store.cleanup_old_screenshots ();
     });
 
     enc.cleanup ();
 }
 
-/* ─── Benchmark: Sign string ─── */
+void bench_full_encrypted_pipeline () {
+    // Simulates the real E2EE path:
+    // generate_path → file_read → encrypt_attachment → encrypt_event → mark_uploaded → cleanup
+    var dir = Path.build_filename (bench_data_dir, "storage-bench-enc-pipeline");
+    DirUtils.create_with_parents (dir, 0755);
+    var store = new Vigil.Services.StorageService (dir);
+    try { store.initialize (); } catch (Error e) {}
 
-void bench_sign_string () {
-    clean_crypto_dir ();
-    var svc = new Vigil.Services.EncryptionService ();
-    svc.user_id = "@bench:test";
-    svc.device_id = "BENCHDEV";
-    svc.initialize ("bench-key");
+    var enc = make_enc_service ();
 
-    var message = "{\"algorithms\":[\"m.olm.v1.curve25519-aes-sha2\",\"m.megolm.v1.aes-sha2\"],\"device_id\":\"BENCHDEV\",\"keys\":{\"curve25519:BENCHDEV\":\"abc\",\"ed25519:BENCHDEV\":\"def\"},\"user_id\":\"@bench:test\"}";
+    // Pre-create a 2MB "screenshot"
+    var fake_png = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < fake_png.length; i++) fake_png[i] = (uint8)(i & 0xFF);
 
-    bench ("sign_string (Ed25519)", 2000, () => {
-        svc.sign_string (message);
+    bench ("pipeline: full E2EE (2MB attach + Megolm)", 20, () => {
+        // 1. Generate path + write fake file
+        var path = store.generate_screenshot_path ();
+        try { FileUtils.set_data (path, fake_png); } catch (Error e) {}
+        try { store.mark_pending (path); } catch (Error e) {}
+
+        // 2. Read file back (simulating upload_media reading the file)
+        uint8[] file_data;
+        try { FileUtils.get_data (path, out file_data); } catch (Error e) { return; }
+
+        // 3. AES-256-CTR encrypt attachment
+        var att = enc.encrypt_attachment (file_data);
+
+        // 4. Build encrypted event JSON (mimics send_encrypted_screenshot)
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("msgtype");
+        builder.add_string_value ("m.image");
+        builder.set_member_name ("body");
+        builder.add_string_value ("Screenshot 2025-01-01 12:00:00");
+        builder.set_member_name ("file");
+        builder.begin_object ();
+        builder.set_member_name ("url");
+        builder.add_string_value ("mxc://test/fake");
+        builder.set_member_name ("key");
+        builder.begin_object ();
+        builder.set_member_name ("kty");
+        builder.add_string_value ("oct");
+        builder.set_member_name ("alg");
+        builder.add_string_value ("A256CTR");
+        builder.set_member_name ("k");
+        builder.add_string_value (
+            Vigil.Services.EncryptionService.base64url_encode_unpadded (att.key)
+        );
+        builder.set_member_name ("ext");
+        builder.add_boolean_value (true);
+        builder.end_object ();
+        builder.set_member_name ("iv");
+        builder.add_string_value (
+            Vigil.Services.EncryptionService.base64_encode_unpadded (att.iv)
+        );
+        builder.set_member_name ("hashes");
+        builder.begin_object ();
+        builder.set_member_name ("sha256");
+        builder.add_string_value (
+            Vigil.Services.EncryptionService.base64_encode_unpadded (att.sha256)
+        );
+        builder.end_object ();
+        builder.set_member_name ("v");
+        builder.add_string_value ("v2");
+        builder.end_object ();
+        builder.end_object ();
+        var gen = new Json.Generator ();
+        gen.set_root (builder.get_root ());
+        var content_json = gen.to_data (null);
+
+        // 5. Megolm encrypt the event
+        enc.encrypt_event ("!room:test", "m.room.message", content_json);
+
+        // 6. Mark uploaded + cleanup
+        store.mark_uploaded (path);
+        store.cleanup_old_screenshots ();
     });
 
-    svc.cleanup ();
+    enc.cleanup ();
 }
 
-/* ─── Benchmark: File read (simulating screenshot read for upload) ─── */
-
-void bench_file_read_2mb () {
-    // Create a 2MB fake screenshot
-    var fake_path = Path.build_filename (bench_data_dir, "fake_2mb.png");
-    var buf = new uint8[2 * 1024 * 1024];
-    for (int i = 0; i < buf.length; i++) {
-        buf[i] = (uint8) (i & 0xFF);
-    }
-    try { FileUtils.set_data (fake_path, buf); } catch (Error e) { return; }
-
-    bench ("read 2MB file into memory (sync)", 100, () => {
-        try {
-            uint8[] contents;
-            FileUtils.get_data (fake_path, out contents);
-        } catch (Error e) {}
-    });
-
-    FileUtils.remove (fake_path);
-}
+/* ════════════════════════════════════════════════════════════════════════════ */
 
 public static int main (string[] args) {
-    // Set XDG_DATA_HOME before any GLib call
     bench_data_dir = Path.build_filename (
         Environment.get_tmp_dir (),
         "vigil-perf-bench-%s".printf (GLib.Uuid.string_random ().substring (0, 8))
@@ -313,38 +556,52 @@ public static int main (string[] args) {
 
     Test.init (ref args);
 
-    print ("\n═══════════════════════════════════════════════════════════════════════════\n");
-    print ("  Vigil Performance Benchmark\n");
-    print ("═══════════════════════════════════════════════════════════════════════════\n\n");
+    print ("\n══════════════════════════════════════════════════════════════════════════════\n");
+    print ("  Vigil Performance Benchmark (comprehensive)\n");
+    print ("══════════════════════════════════════════════════════════════════════════════\n");
 
-    print ("── Random Number Generation ─────────────────────────────────────────────\n");
+    print ("\n── 1. Random Number Generation ──────────────────────────────────────────────\n");
     bench_urandom_open_read_close ();
     bench_urandom_cached_fd ();
+    bench_urandom_cached_fd_48 ();
 
-    print ("\n── Encryption ───────────────────────────────────────────────────────────\n");
+    print ("\n── 2. Olm / Megolm Encryption ───────────────────────────────────────────────\n");
     bench_sign_string ();
     bench_megolm_encrypt ();
+    bench_megolm_encrypt_plus_save ();
     bench_encrypt_event ();
 
-    print ("\n── Storage Operations ───────────────────────────────────────────────────\n");
+    print ("\n── 3. AES-256-CTR Attachment Encryption ─────────────────────────────────────\n");
+    bench_encrypt_attachment_1kb ();
+    bench_encrypt_attachment_100kb ();
+    bench_encrypt_attachment_2mb ();
+    print ("   -- component breakdown for 2 MB --\n");
+    bench_aes_ctr_raw_2mb ();
+    bench_sha256_2mb ();
+    bench_sha256_hex_to_bytes ();
+    bench_memcpy_2mb ();
+    bench_base64url_encode ();
+
+    print ("\n── 4. Storage Operations ────────────────────────────────────────────────────\n");
     bench_storage_mark_cycle ();
     bench_storage_pending_scan_empty ();
     bench_storage_pending_scan_50 ();
     bench_storage_pending_scan_200 ();
+    bench_pending_count_cached ();
     bench_storage_cleanup_100 ();
+    bench_storage_cleanup_below_limit ();
 
-    print ("\n── I/O ─────────────────────────────────────────────────────────────────\n");
+    print ("\n── 5. I/O ──────────────────────────────────────────────────────────────────\n");
     bench_file_read_2mb ();
     bench_config_hash ();
 
-    print ("\n── Full Pipeline (no network) ───────────────────────────────────────────\n");
+    print ("\n── 6. Full Pipeline (no network) ────────────────────────────────────────────\n");
     bench_full_pipeline_no_network ();
+    bench_full_encrypted_pipeline ();
 
-    print ("\n═══════════════════════════════════════════════════════════════════════════\n");
+    print ("\n══════════════════════════════════════════════════════════════════════════════\n");
 
-    // Cleanup
     delete_directory_recursive (bench_data_dir);
-
     return 0;
 }
 
@@ -361,7 +618,5 @@ void delete_directory_recursive (string path) {
             }
         }
         DirUtils.remove (path);
-    } catch (Error e) {
-        // Ignore cleanup errors
-    }
+    } catch (Error e) {}
 }

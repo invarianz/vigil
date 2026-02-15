@@ -628,12 +628,12 @@ public class Vigil.Services.EncryptionService : Object {
      * @return The encrypted attachment data, or null on failure.
      */
     public EncryptedAttachment? encrypt_attachment (uint8[] plaintext) {
-        // Generate 256-bit key and 128-bit IV
-        var key = generate_random (32);
-        var iv = generate_random (16);
+        // Generate 256-bit key and 128-bit IV in a single read
+        var key_iv = generate_random (48);
+        var key = key_iv[0:32];
+        var iv = key_iv[32:48];
 
-        // Matrix spec: set the lower 8 bytes of IV to zero (counter portion)
-        // The upper 8 bytes are random, lower 8 are the counter starting at 0
+        // Matrix spec: lower 8 bytes of IV are the counter, starting at 0
         for (int i = 8; i < 16; i++) {
             iv[i] = 0;
         }
@@ -643,10 +643,11 @@ public class Vigil.Services.EncryptionService : Object {
             warning ("EVP_EncryptInit_ex failed");
             return null;
         }
-        ctx.set_padding (0); // CTR mode doesn't need padding
+        ctx.set_padding (0);
 
-        // Allocate output buffer (CTR mode: ciphertext length == plaintext length)
-        var ciphertext = new uint8[plaintext.length + 16]; // +16 for block safety
+        // CTR mode: ciphertext length == plaintext length (no padding).
+        // Encrypt directly into the final buffer to avoid an extra 2MB copy.
+        var ciphertext = new uint8[plaintext.length];
         int out_len = 0;
         int final_len = 0;
 
@@ -655,32 +656,25 @@ public class Vigil.Services.EncryptionService : Object {
             return null;
         }
 
-        if (ctx.encrypt_final (ciphertext[out_len:ciphertext.length], out final_len) != 1) {
-            warning ("EVP_EncryptFinal_ex failed");
+        // For CTR mode final_len is always 0, but call for correctness
+        if (out_len < plaintext.length) {
+            if (ctx.encrypt_final (ciphertext[out_len:ciphertext.length], out final_len) != 1) {
+                warning ("EVP_EncryptFinal_ex failed");
+                return null;
+            }
+        }
+
+        // SHA-256 of ciphertext using OpenSSL (hardware-accelerated, raw bytes output)
+        var sha256 = new uint8[32];
+        uint md_size;
+        if (OpenSSL.digest (ciphertext, ciphertext.length, sha256, out md_size,
+                            OpenSSL.sha256 ()) != 1) {
+            warning ("EVP_Digest SHA-256 failed");
             return null;
         }
 
-        int total_len = out_len + final_len;
-
-        // Trim to actual size
-        var result_ct = new uint8[total_len];
-        Memory.copy (result_ct, ciphertext, total_len);
-
-        // SHA-256 of ciphertext
-        var checksum = new Checksum (ChecksumType.SHA256);
-        checksum.update (result_ct, total_len);
-        var hash_hex = checksum.get_string ();
-
-        // Convert hex to raw bytes
-        var sha256 = new uint8[32];
-        for (int i = 0; i < 32; i++) {
-            sha256[i] = (uint8) uint64.parse (
-                hash_hex.substring (i * 2, 2), 16
-            );
-        }
-
         var attachment = EncryptedAttachment ();
-        attachment.ciphertext = (owned) result_ct;
+        attachment.ciphertext = (owned) ciphertext;
         attachment.key = (owned) key;
         attachment.iv = (owned) iv;
         attachment.sha256 = (owned) sha256;
