@@ -1,0 +1,4 @@
+src/Application.vala
+src/MainWindow.vala
+src/Widgets/StatusView.vala
+src/Widgets/SettingsView.vala

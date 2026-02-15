@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.invarianz.vigil" path="/io/github/invarianz/vigil/">
+    <!-- Window state -->
+    <key name="window-width" type="i">
+      <default>500</default>
+      <summary>Window width</summary>
+    </key>
+    <key name="window-height" type="i">
+      <default>600</default>
+      <summary>Window height</summary>
+    </key>
+    <key name="window-maximized" type="b">
+      <default>false</default>
+      <summary>Window maximized state</summary>
+    </key>
+
+    <!-- Monitoring -->
+    <key name="monitoring-enabled" type="b">
+      <default>false</default>
+      <summary>Whether screenshot monitoring is active</summary>
+    </key>
+
+    <!-- Schedule -->
+    <key name="min-interval-seconds" type="i">
+      <default>120</default>
+      <summary>Minimum interval between screenshots in seconds</summary>
+    </key>
+    <key name="max-interval-seconds" type="i">
+      <default>600</default>
+      <summary>Maximum interval between screenshots in seconds</summary>
+    </key>
+
+    <!-- Upload -->
+    <key name="endpoint-url" type="s">
+      <default>''</default>
+      <summary>HTTPS endpoint URL for uploading screenshots</summary>
+    </key>
+    <key name="api-token" type="s">
+      <default>''</default>
+      <summary>API authentication token</summary>
+    </key>
+
+    <!-- Device -->
+    <key name="device-id" type="s">
+      <default>''</default>
+      <summary>Unique device identifier (auto-generated)</summary>
+    </key>
+
+    <!-- Storage -->
+    <key name="max-local-screenshots" type="i">
+      <default>100</default>
+      <summary>Maximum number of screenshots to keep locally</summary>
+    </key>
+
+    <!-- System -->
+    <key name="autostart-enabled" type="b">
+      <default>false</default>
+      <summary>Start Vigil at login</summary>
+    </key>
+  </schema>
+</schemalist>

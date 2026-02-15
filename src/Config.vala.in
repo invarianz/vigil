@@ -1,0 +1,10 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-FileCopyrightText: 2025 invarianz
+ */
+
+namespace Vigil.Config {
+    public const string APP_ID = @APP_ID@;
+    public const string VERSION = @VERSION@;
+    public const string LOCALEDIR = @LOCALEDIR@;
+}

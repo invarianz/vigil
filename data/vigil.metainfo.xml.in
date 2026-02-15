@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2025 invarianz -->
+<component type="desktop-application">
+  <id>io.github.invarianz.vigil</id>
+  <launchable type="desktop-id">io.github.invarianz.vigil.desktop</launchable>
+  <translation type="gettext">io.github.invarianz.vigil</translation>
+  <metadata_license>CC-BY-SA-3.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Vigil</name>
+  <summary>Accountability screenshot software</summary>
+  <description>
+    <p>
+      Vigil takes screenshots of your screen at random intervals and uploads
+      them to a server where an accountability partner can review them. This
+      helps people who want external accountability for their screen usage.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Random-interval screenshots that cannot be predicted</li>
+      <li>Works on both X11 and Wayland (including Elementary OS 7 and 8)</li>
+      <li>Uploads to a configurable HTTPS endpoint</li>
+      <li>Queues screenshots for upload when offline</li>
+      <li>Detects and reports when monitoring is disabled</li>
+      <li>Follows elementary OS Human Interface Guidelines</li>
+    </ul>
+  </description>
+
+  <branding>
+    <color type="primary">#3689e6</color>
+  </branding>
+
+  <content_rating type="oars-1.1" />
+
+  <developer id="io.github.invarianz">
+    <name>invarianz</name>
+  </developer>
+
+  <url type="homepage">https://github.com/invarianz/Vigil</url>
+  <url type="bugtracker">https://github.com/invarianz/Vigil/issues</url>
+  <url type="vcs-browser">https://github.com/invarianz/Vigil</url>
+
+  <custom>
+    <value key="x-appcenter-color-primary">#3689e6</value>
+    <value key="x-appcenter-color-primary-text">#ffffff</value>
+  </custom>
+
+  <releases>
+    <release version="1.0.0" date="2025-01-01">
+      <description>
+        <p>Initial release</p>
+      </description>
+    </release>
+  </releases>
+</component>

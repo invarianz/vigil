@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Vigil
+Comment=Accountability screenshot software
+GenericName=Accountability Monitor
+Exec=io.github.invarianz.vigil
+Icon=io.github.invarianz.vigil
+Terminal=false
+Type=Application
+Categories=GTK;Utility;
+Keywords=accountability;screenshot;monitor;
+StartupNotify=true
+X-GNOME-Gettext-Domain=io.github.invarianz.vigil
