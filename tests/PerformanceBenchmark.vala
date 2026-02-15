@@ -540,6 +540,213 @@ void bench_full_encrypted_pipeline () {
     enc.cleanup ();
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Section 7: Upload Path Overhead (copy vs zero-copy, file delete patterns)
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* Measure Bytes construction: copy vs take (zero-copy) */
+void bench_bytes_copy_2mb () {
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("new Bytes(data) - COPIES 2 MB", 100, () => {
+        var b = new Bytes (data);
+        // Access to prevent optimization
+        b.get_data ();
+    });
+}
+
+void bench_bytes_take_2mb () {
+    bench ("new Bytes.take(data) - zero-copy 2 MB", 100, () => {
+        var data = new uint8[2 * 1024 * 1024];
+        var b = new Bytes.take ((owned) data);
+        b.get_data ();
+    });
+}
+
+/* File delete: query_exists+delete vs direct delete with error handling */
+void bench_file_delete_exists_then_delete () {
+    var dir = Path.build_filename (bench_data_dir, "bench-delete-exists");
+    DirUtils.create_with_parents (dir, 0755);
+
+    bench ("file delete: query_exists + delete (exists)", 500, () => {
+        var path = Path.build_filename (dir, "testfile.tmp");
+        try { FileUtils.set_contents (path, "x"); } catch (Error e) {}
+
+        var f = File.new_for_path (path);
+        try {
+            if (f.query_exists ()) {
+                f.delete ();
+            }
+        } catch (Error e) {}
+    });
+}
+
+void bench_file_delete_direct () {
+    var dir = Path.build_filename (bench_data_dir, "bench-delete-direct");
+    DirUtils.create_with_parents (dir, 0755);
+
+    bench ("file delete: direct delete (exists)", 500, () => {
+        var path = Path.build_filename (dir, "testfile.tmp");
+        try { FileUtils.set_contents (path, "x"); } catch (Error e) {}
+
+        try {
+            File.new_for_path (path).delete ();
+        } catch (Error e) {}
+    });
+}
+
+void bench_file_delete_exists_then_delete_missing () {
+    var dir = Path.build_filename (bench_data_dir, "bench-delete-missing-e");
+    DirUtils.create_with_parents (dir, 0755);
+    var path = Path.build_filename (dir, "nonexistent.tmp");
+
+    bench ("file delete: query_exists + delete (missing)", 2000, () => {
+        var f = File.new_for_path (path);
+        try {
+            if (f.query_exists ()) {
+                f.delete ();
+            }
+        } catch (Error e) {}
+    });
+}
+
+void bench_file_delete_direct_missing () {
+    var dir = Path.build_filename (bench_data_dir, "bench-delete-missing-d");
+    DirUtils.create_with_parents (dir, 0755);
+    var path = Path.build_filename (dir, "nonexistent.tmp");
+
+    bench ("file delete: direct delete (missing)", 2000, () => {
+        try {
+            File.new_for_path (path).delete ();
+        } catch (Error e) {}
+    });
+}
+
+/* OpenSSL SHA-256 (actual hot path) vs GLib.Checksum */
+void bench_sha256_openssl_2mb () {
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("SHA-256 of 2 MB (OpenSSL EVP_Digest)", 100, () => {
+        var sha256 = new uint8[32];
+        uint md_size;
+        OpenSSL.digest (data, data.length, sha256, out md_size, OpenSSL.sha256 ());
+    });
+}
+
+/* base64url encoding: current implementation (multiple string copies) */
+void bench_base64url_current () {
+    var data = new uint8[32];
+    for (int i = 0; i < 32; i++) data[i] = (uint8)(i * 7 + 0xAB);
+
+    bench ("base64url (current: encode+strip+replace)", 5000, () => {
+        // Current implementation path:
+        var encoded = Base64.encode (data);
+        while (encoded.has_suffix ("=")) {
+            encoded = encoded.substring (0, encoded.length - 1);
+        }
+        var _result = encoded.replace ("+", "-").replace ("/", "_");
+    });
+}
+
+/* base64url encoding: single-pass alternative */
+void bench_base64url_singlepass () {
+    var data = new uint8[32];
+    for (int i = 0; i < 32; i++) data[i] = (uint8)(i * 7 + 0xAB);
+
+    bench ("base64url (single-pass StringBuilder)", 5000, () => {
+        var encoded = Base64.encode (data);
+        var sb = new StringBuilder.sized (encoded.length);
+        for (int i = 0; i < encoded.length; i++) {
+            char c = encoded[i];
+            if (c == '=') break;
+            else if (c == '+') sb.append_c ('-');
+            else if (c == '/') sb.append_c ('_');
+            else sb.append_c (c);
+        }
+        var _result = sb.str;
+    });
+}
+
+/* Measure mark_uploaded file count cache invalidation */
+void bench_mark_uploaded_then_cleanup () {
+    var dir = Path.build_filename (bench_data_dir, "bench-upload-cleanup");
+    DirUtils.create_with_parents (dir, 0755);
+    var store = new Vigil.Services.StorageService (dir);
+    store.max_local_screenshots = 50;
+    try { store.initialize (); } catch (Error e) {}
+
+    bench ("mark_uploaded + cleanup (stale count cache)", 100, () => {
+        // Create 60 files (above 50 limit)
+        for (int i = 0; i < 60; i++) {
+            var path = Path.build_filename (store.screenshots_dir, "mu_%04d.png".printf (i));
+            try { FileUtils.set_contents (path, "fake"); } catch (Error e) {}
+            try { store.mark_pending (path); } catch (Error e) {}
+        }
+        // Upload first 20 (deletes them, but _screenshot_file_count not updated)
+        for (int i = 0; i < 20; i++) {
+            var path = Path.build_filename (store.screenshots_dir, "mu_%04d.png".printf (i));
+            store.mark_uploaded (path);
+        }
+        // Cleanup should do a full dir scan since count cache is stale
+        store.cleanup_old_screenshots ();
+    });
+}
+
+/* JSON builder cost for encrypted event envelope */
+void bench_json_encrypted_event () {
+    bench ("JSON build: encrypted event envelope", 2000, () => {
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("msgtype");
+        builder.add_string_value ("m.image");
+        builder.set_member_name ("body");
+        builder.add_string_value ("Screenshot 2025-01-01 12:00:00");
+        builder.set_member_name ("file");
+        builder.begin_object ();
+        builder.set_member_name ("url");
+        builder.add_string_value ("mxc://test/fake");
+        builder.set_member_name ("mimetype");
+        builder.add_string_value ("image/png");
+        builder.set_member_name ("key");
+        builder.begin_object ();
+        builder.set_member_name ("kty");
+        builder.add_string_value ("oct");
+        builder.set_member_name ("key_ops");
+        builder.begin_array ();
+        builder.add_string_value ("encrypt");
+        builder.add_string_value ("decrypt");
+        builder.end_array ();
+        builder.set_member_name ("alg");
+        builder.add_string_value ("A256CTR");
+        builder.set_member_name ("k");
+        builder.add_string_value ("dGVzdGtleQ");
+        builder.set_member_name ("ext");
+        builder.add_boolean_value (true);
+        builder.end_object ();
+        builder.set_member_name ("iv");
+        builder.add_string_value ("dGVzdGl2");
+        builder.set_member_name ("hashes");
+        builder.begin_object ();
+        builder.set_member_name ("sha256");
+        builder.add_string_value ("dGVzdGhhc2g");
+        builder.end_object ();
+        builder.set_member_name ("v");
+        builder.add_string_value ("v2");
+        builder.end_object ();
+        builder.set_member_name ("info");
+        builder.begin_object ();
+        builder.set_member_name ("mimetype");
+        builder.add_string_value ("image/png");
+        builder.end_object ();
+        builder.end_object ();
+        var gen = new Json.Generator ();
+        gen.set_root (builder.get_root ());
+        gen.to_data (null);
+    });
+}
+
 /* ════════════════════════════════════════════════════════════════════════════ */
 
 public static int main (string[] args) {
@@ -598,6 +805,25 @@ public static int main (string[] args) {
     print ("\n── 6. Full Pipeline (no network) ────────────────────────────────────────────\n");
     bench_full_pipeline_no_network ();
     bench_full_encrypted_pipeline ();
+
+    print ("\n── 7. Upload Path Overhead ──────────────────────────────────────────────────\n");
+    bench_bytes_copy_2mb ();
+    bench_bytes_take_2mb ();
+    print ("   -- file delete patterns --\n");
+    bench_file_delete_exists_then_delete ();
+    bench_file_delete_direct ();
+    bench_file_delete_exists_then_delete_missing ();
+    bench_file_delete_direct_missing ();
+    print ("   -- SHA-256 hot path --\n");
+    bench_sha256_openssl_2mb ();
+    bench_sha256_2mb ();
+    print ("   -- base64url encoding --\n");
+    bench_base64url_current ();
+    bench_base64url_singlepass ();
+    print ("   -- storage cache invalidation --\n");
+    bench_mark_uploaded_then_cleanup ();
+    print ("   -- JSON building --\n");
+    bench_json_encrypted_event ();
 
     print ("\n══════════════════════════════════════════════════════════════════════════════\n");
 

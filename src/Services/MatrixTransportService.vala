@@ -683,27 +683,10 @@ public class Vigil.Services.MatrixTransportService : Object {
             return false;
         }
 
-        // Read file into memory
+        // Read file directly into uint8[] (single allocation, no intermediate Bytes copy)
         uint8[] file_data;
         try {
-            var file = File.new_for_path (file_path);
-            if (!file.query_exists ()) {
-                screenshot_send_failed (file_path, "File not found: %s".printf (file_path));
-                return false;
-            }
-
-            var file_info = yield file.query_info_async (
-                "standard::size",
-                FileQueryInfoFlags.NONE,
-                Priority.DEFAULT,
-                null
-            );
-            var file_size = file_info.get_size ();
-
-            var input_stream = yield file.read_async (Priority.DEFAULT, null);
-            var bytes = yield input_stream.read_bytes_async ((size_t) file_size, Priority.DEFAULT, null);
-            input_stream.close ();
-            file_data = bytes.get_data ();
+            FileUtils.get_data (file_path, out file_data);
         } catch (Error e) {
             screenshot_send_failed (file_path, "Failed to read file: %s".printf (e.message));
             return false;
@@ -719,7 +702,8 @@ public class Vigil.Services.MatrixTransportService : Object {
         }
 
         // No E2EE: upload plaintext (fallback)
-        var content_uri = yield upload_bytes (new Bytes (file_data), "image/png", filename);
+        var content_uri = yield upload_bytes (
+            new Bytes.take ((owned) file_data), "image/png", filename);
         if (content_uri == null) {
             screenshot_send_failed (file_path, "Media upload failed");
             return false;
@@ -770,8 +754,9 @@ public class Vigil.Services.MatrixTransportService : Object {
         }
 
         // Step 2: Upload encrypted blob (opaque binary, not image/png)
+        // Use Bytes.take to transfer ownership instead of copying the 2MB ciphertext
         var content_uri = yield upload_bytes (
-            new Bytes (enc_result.ciphertext),
+            new Bytes.take ((owned) enc_result.ciphertext),
             "application/octet-stream",
             filename
         );

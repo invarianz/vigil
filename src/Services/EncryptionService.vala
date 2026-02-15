@@ -681,22 +681,31 @@ public class Vigil.Services.EncryptionService : Object {
      */
     public static string base64_encode_unpadded (uint8[] data) {
         var encoded = Base64.encode (data);
-        // Strip trailing '=' padding
-        while (encoded.has_suffix ("=")) {
-            encoded = encoded.substring (0, encoded.length - 1);
+        // Find the end before padding
+        int len = encoded.length;
+        while (len > 0 && encoded[len - 1] == '=') {
+            len--;
         }
-        return encoded;
+        return encoded.substring (0, len);
     }
 
     /**
      * Encode raw bytes to unpadded base64url (RFC 4648 §5).
      *
-     * Matrix JWK keys use base64url encoding.
+     * Single-pass: strips padding and translates +/ to -_ in one scan
+     * to avoid multiple intermediate string allocations.
      */
     public static string base64url_encode_unpadded (uint8[] data) {
-        var encoded = base64_encode_unpadded (data);
-        // base64 → base64url: replace + with -, / with _
-        return encoded.replace ("+", "-").replace ("/", "_");
+        var encoded = Base64.encode (data);
+        var sb = new StringBuilder.sized (encoded.length);
+        for (int i = 0; i < encoded.length; i++) {
+            char c = encoded[i];
+            if (c == '=') break;
+            else if (c == '+') sb.append_c ('-');
+            else if (c == '/') sb.append_c ('_');
+            else sb.append_c (c);
+        }
+        return sb.str;
     }
 
     /* ───── Private helpers ───── */

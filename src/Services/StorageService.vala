@@ -110,24 +110,23 @@ public class Vigil.Services.StorageService : Object {
     public void mark_uploaded (string screenshot_path) {
         var basename = Path.get_basename (screenshot_path);
         var marker_path = Path.build_filename (pending_dir, basename + ".pending");
-        var marker = File.new_for_path (marker_path);
 
+        // Delete marker directly -- skip query_exists to avoid redundant stat()
         try {
-            if (marker.query_exists ()) {
-                marker.delete ();
-            }
+            File.new_for_path (marker_path).delete ();
         } catch (Error e) {
-            warning ("Failed to remove pending marker: %s", e.message);
+            // Marker may already be gone; not an error
         }
 
         // Delete the screenshot file -- it's been delivered, no need to keep it
         try {
-            var screenshot_file = File.new_for_path (screenshot_path);
-            if (screenshot_file.query_exists ()) {
-                screenshot_file.delete ();
+            File.new_for_path (screenshot_path).delete ();
+            // Keep _screenshot_file_count in sync to avoid unnecessary dir scans
+            if (_screenshot_file_count > 0) {
+                _screenshot_file_count--;
             }
         } catch (Error e) {
-            warning ("Failed to delete uploaded screenshot: %s", e.message);
+            // File may already be gone; not an error
         }
 
         if (pending_count > 0) {
@@ -170,18 +169,17 @@ public class Vigil.Services.StorageService : Object {
                 var lines = ((string) contents).split ("\n");
 
                 if (lines.length >= 2) {
-                    var screenshot_file = File.new_for_path (lines[0]);
-                    if (screenshot_file.query_exists ()) {
+                    if (FileUtils.test (lines[0], FileTest.EXISTS)) {
                         var item = PendingScreenshot ();
                         item.file_path = lines[0];
                         item.capture_time = new DateTime.from_iso8601 (lines[1], null);
                         pending.add (item);
                     } else {
-                        // Screenshot file was deleted; clean up marker
+                        // Screenshot file was deleted; clean up orphan marker
                         try {
                             marker.delete ();
                         } catch (Error del_err) {
-                            warning ("Failed to delete orphan marker: %s", del_err.message);
+                            // Ignore cleanup failures
                         }
                     }
                 }
@@ -260,7 +258,7 @@ public class Vigil.Services.StorageService : Object {
                 );
 
                 // Only delete if already uploaded (no pending marker)
-                if (!File.new_for_path (marker_path).query_exists ()) {
+                if (!FileUtils.test (marker_path, FileTest.EXISTS)) {
                     try {
                         File.new_for_path (file_path).delete ();
                         deleted++;
