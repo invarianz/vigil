@@ -308,6 +308,43 @@ public class Vigil.Daemon.DBusServer : Object {
         _settings.changed["matrix-room-id"].connect (() => {
             _matrix_svc.room_id = _settings.get_string ("matrix-room-id");
         });
+
+        // Re-initialize E2EE when setup completes while daemon is running
+        _settings.changed["e2ee-pickle-key"].connect (() => {
+            initialize_encryption ();
+        });
+    }
+
+    private void initialize_encryption () {
+        var pickle_key = _settings.get_string ("e2ee-pickle-key");
+        var user_id = _settings.get_string ("matrix-user-id");
+        var device_id = _settings.get_string ("device-id");
+
+        if (pickle_key == "" || user_id == "" || device_id == "") {
+            return;
+        }
+
+        var enc = _matrix_svc.encryption;
+        if (enc == null) {
+            enc = new Vigil.Services.EncryptionService ();
+            _matrix_svc.encryption = enc;
+        }
+
+        // Skip if already initialized with the same credentials
+        if (enc.is_ready && enc.device_id == device_id && enc.user_id == user_id) {
+            return;
+        }
+
+        enc.cleanup ();
+        enc.device_id = device_id;
+        enc.user_id = user_id;
+
+        if (enc.initialize (pickle_key)) {
+            enc.restore_group_session ();
+            debug ("E2EE (re)initialized from settings (session: %s)", enc.megolm_session_id);
+        } else {
+            warning ("E2EE initialization failed");
+        }
     }
 
     private async void handle_capture () {

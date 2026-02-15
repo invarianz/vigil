@@ -2,16 +2,17 @@
 
 Accountability screenshot software for elementary OS.
 
-vigil takes screenshots of your screen at random intervals and sends them to your accountability partner via Matrix (with end-to-end encryption). It works on both X11 and Wayland, including elementary OS 7 and 8.
+vigil takes screenshots of your screen at random intervals and sends them to your accountability partner via Matrix with native end-to-end encryption. It works on both X11 and Wayland, including elementary OS 7 and 8.
 
 ## Features
 
 - Random-interval screenshots that cannot be predicted
 - Dual backend: XDG Desktop Portal (Wayland) and Gala D-Bus (X11)
-- **Matrix transport**: sends screenshots directly to a private encrypted chat room -- no third-party server sees your data
-- **Built-in login**: enter your Matrix username and password directly in the app -- no need to use curl
+- **Native E2EE**: built-in Olm/Megolm encryption via libolm -- no external proxy needed
+- **One-button setup**: enter homeserver, username, password, partner ID, and E2EE password -- one click does login, room creation, key exchange, and encryption setup
+- **Matrix transport**: sends screenshots to a private encrypted chat room -- no third-party server sees your data
 - Queues screenshots for delivery when offline, retries on startup
-- Tamper detection: alerts your partner if the daemon is stopped, autostart is removed, settings are changed, or the binary is modified
+- Tamper detection: alerts your partner if the daemon is stopped, autostart is removed, settings are changed, E2EE is disabled, or the binary is modified
 - Heartbeat dead man's switch: silence = alert
 - Systemd user service with watchdog and restart-on-kill
 - Follows elementary OS Human Interface Guidelines
@@ -21,8 +22,18 @@ vigil takes screenshots of your screen at random intervals and sends them to you
 
 vigil runs as two processes:
 
-- **vigil-daemon**: headless systemd service that takes screenshots, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
-- **vigil GUI**: thin GTK4 app that connects to the daemon over D-Bus. Shows status and settings.
+- **vigil-daemon**: headless systemd service that takes screenshots, encrypts them with Megolm, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
+- **vigil GUI**: thin GTK4 app that connects to the daemon over D-Bus. Shows status and settings. Handles one-time setup (login, room creation, E2EE initialization).
+
+### E2EE flow
+
+1. GUI creates an OlmAccount and uploads device keys to the homeserver
+2. A Megolm outbound group session is created for room encryption
+3. Partner's device keys are queried and one-time keys claimed
+4. The Megolm room key is Olm-encrypted per-device and sent via to-device messages
+5. All outgoing messages and screenshots are Megolm-encrypted
+6. Crypto state is pickled (encrypted with the E2EE password) and persisted to disk
+7. The daemon restores the pickled state on startup and continues encrypting
 
 ## How Wayland screenshots work
 
@@ -33,7 +44,7 @@ On Wayland, vigil uses the XDG Desktop Portal Screenshot interface. The first ti
 ```bash
 # Install dependencies (elementary OS 8 / Ubuntu 24.04)
 sudo apt install valac meson libgranite-7-dev libgtk-4-dev \
-  libjson-glib-dev libsoup-3.0-dev libportal-dev libportal-gtk4-dev
+  libjson-glib-dev libsoup-3.0-dev libportal-dev libportal-gtk4-dev libolm-dev
 
 # Build
 meson setup build
@@ -63,37 +74,28 @@ Both you and your partner need a Matrix account. You can use any Matrix homeserv
 
 Your partner installs **Element** (free) on their phone (Android/iOS) or desktop.
 
-### Step 2: Create a private room
+### Step 2: Configure vigil
 
-1. In Element, create a new room
-2. Set it to **Private** (invite only)
-3. **Enable encryption** (this is the default in Element for private rooms)
-4. Invite your partner to the room
-5. Note the **Room ID** (click room name > Settings > Advanced > Internal room ID). It looks like `!abc123xyz:matrix.org`
+Open the vigil GUI and go to Settings. Fill in:
 
-### Step 3: Configure vigil
+1. **Homeserver** -- just the server name (e.g. `matrix.org`). vigil auto-discovers the full URL via `.well-known`.
+2. **Username** -- your Matrix username (without the `@` prefix)
+3. **Password** -- your Matrix password
+4. **Partner Matrix ID** -- your accountability partner's full Matrix ID (e.g. `@partner:matrix.org`)
+5. **E2EE Password** -- a password that encrypts your encryption keys at rest
 
-Open the vigil GUI and go to Settings:
+Click **Setup**. vigil will:
+- Discover and connect to your homeserver
+- Log in with your credentials
+- Create a private encrypted room and invite your partner
+- Initialize end-to-end encryption
+- Upload device keys and share room keys with your partner's devices
 
-1. Enter your **Homeserver URL** (e.g. `https://matrix.org` or `http://localhost:8009` for pantalaimon)
-2. Enter your Matrix **username** and **password**
-3. Click **Login** -- vigil obtains the access token automatically
-4. Enter the **Room ID** from step 2
-5. Click **Test Connection** to verify everything works
-6. Enable monitoring
+Once setup completes, enable monitoring from the Status tab.
 
-Or configure via command line:
+### Step 3: Partner accepts the invite
 
-```bash
-gsettings set io.github.invarianz.vigil matrix-homeserver-url 'https://matrix.org'
-gsettings set io.github.invarianz.vigil matrix-access-token 'syt_YOUR_TOKEN'
-gsettings set io.github.invarianz.vigil matrix-room-id '!YOUR_ROOM_ID:matrix.org'
-gsettings set io.github.invarianz.vigil monitoring-enabled true
-```
-
-### Step 4: Verify it works
-
-Your partner should see messages appearing in the Element room:
+Your partner opens Element and accepts the room invite. They will see:
 
 - **Screenshots**: appear as images with timestamps
 - **Heartbeats**: periodic status messages like `Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0`
@@ -101,7 +103,7 @@ Your partner should see messages appearing in the Element room:
 
 If vigil goes completely silent (killed, uninstalled), the **absence of heartbeats** is itself the alert.
 
-### Step 5: Lock it down
+### Step 4: Lock it down
 
 Once everything is working, your accountability partner should verify:
 
@@ -115,36 +117,7 @@ The daemon monitors its own integrity and alerts via Matrix if:
 - The daemon binary is replaced
 - Monitoring is disabled via GSettings
 - Matrix transport settings are cleared or partially removed
-
-## End-to-end encryption with pantalaimon
-
-For E2EE, vigil talks to pantalaimon (a local encryption proxy) instead of the homeserver directly. Pantalaimon handles all the Olm/Megolm crypto transparently.
-
-```bash
-# Install pantalaimon
-pip install pantalaimon
-
-# Create config
-mkdir -p ~/.config/pantalaimon
-cat > ~/.config/pantalaimon/pantalaimon.conf << 'EOF'
-[Default]
-Homeserver = https://matrix.org
-ListenAddress = localhost
-ListenPort = 8009
-IgnoreVerification = true
-EOF
-
-# Start pantalaimon (or set up as a systemd user service)
-pantalaimon --config ~/.config/pantalaimon/pantalaimon.conf &
-```
-
-Then in vigil, set the homeserver URL to `http://localhost:8009` and log in through pantalaimon.
-
-## Without E2EE (simpler setup)
-
-If you trust your Matrix homeserver (e.g. you self-host it), you can skip pantalaimon entirely. Just point the homeserver URL directly at your server. The room will still be invite-only, but the homeserver operator could technically see the images.
-
-For self-hosting, [Conduit](https://conduit.rs/) is a lightweight Matrix server that runs on a Raspberry Pi.
+- E2EE encryption keys are cleared
 
 ## Configuration
 
@@ -152,9 +125,13 @@ All settings are stored via GSettings (`io.github.invarianz.vigil`):
 
 | Setting | Description | Default |
 |---|---|---|
-| `matrix-homeserver-url` | Matrix homeserver or pantalaimon URL | (empty) |
-| `matrix-access-token` | Matrix access token | (empty) |
-| `matrix-room-id` | Matrix room ID for screenshots | (empty) |
+| `matrix-homeserver-url` | Matrix homeserver URL (auto-discovered) | (empty) |
+| `matrix-access-token` | Matrix access token (set during login) | (empty) |
+| `matrix-room-id` | Matrix room ID (auto-created) | (empty) |
+| `matrix-user-id` | Matrix user ID (set during login) | (empty) |
+| `partner-matrix-id` | Partner's Matrix user ID | (empty) |
+| `device-id` | Matrix device ID (set during login) | (empty) |
+| `e2ee-pickle-key` | E2EE password for encrypting crypto state | (empty) |
 | `min-interval-seconds` | Minimum time between screenshots | 120 (2 min) |
 | `max-interval-seconds` | Maximum time between screenshots | 600 (10 min) |
 | `max-local-screenshots` | Screenshots to keep locally | 100 |

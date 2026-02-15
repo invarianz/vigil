@@ -107,14 +107,16 @@ public class Vigil.Services.TamperDetectionService : Object {
             return "no-settings";
         }
 
-        var data = "%s|%s|%s|%d|%d|%d|%b".printf (
+        var data = "%s|%s|%s|%d|%d|%d|%b|%s|%s".printf (
             _settings.get_string ("matrix-homeserver-url"),
             _settings.get_string ("matrix-access-token"),
             _settings.get_string ("matrix-room-id"),
             _settings.get_int ("min-interval-seconds"),
             _settings.get_int ("max-interval-seconds"),
             _settings.get_int ("max-local-screenshots"),
-            _settings.get_boolean ("monitoring-enabled")
+            _settings.get_boolean ("monitoring-enabled"),
+            _settings.get_string ("device-id"),
+            _settings.get_string ("e2ee-pickle-key")
         );
 
         return Checksum.compute_for_string (ChecksumType.SHA256, data);
@@ -207,6 +209,15 @@ public class Vigil.Services.TamperDetectionService : Object {
             emit_tamper ("matrix_incomplete",
                 "Matrix transport settings are partially cleared (transport broken)");
         }
+
+        // Check if E2EE settings were cleared
+        string device_id = _settings.get_string ("device-id");
+        string pickle_key = _settings.get_string ("e2ee-pickle-key");
+
+        if (device_id != "" && pickle_key == "") {
+            emit_tamper ("e2ee_disabled",
+                "E2EE pickle key was cleared (encryption will not work)");
+        }
     }
 
     /**
@@ -251,7 +262,9 @@ public class Vigil.Services.TamperDetectionService : Object {
             "max-interval-seconds",
             "matrix-homeserver-url",
             "matrix-access-token",
-            "matrix-room-id"
+            "matrix-room-id",
+            "device-id",
+            "e2ee-pickle-key"
         };
 
         foreach (var key in critical_keys) {

@@ -57,6 +57,16 @@
       <summary>Matrix device identifier (auto-generated at login)</summary>
     </key>
 
+    <!-- E2EE -->
+    <key name="matrix-user-id" type="s">
+      <default>''</default>
+      <summary>Matrix user ID (e.g. @user:matrix.org), set during login</summary>
+    </key>
+    <key name="e2ee-pickle-key" type="s">
+      <default>''</default>
+      <summary>E2EE password used to encrypt Olm/Megolm state at rest</summary>
+    </key>
+
     <!-- Storage -->
     <key name="max-local-screenshots" type="i">
       <default>100</default>

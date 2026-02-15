@@ -56,11 +56,20 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         var matrix_svc = new Vigil.Services.MatrixTransportService ();
         var enc_svc = new Vigil.Services.EncryptionService ();
 
-        // Restore E2EE state if device_id is set (setup was completed)
+        // Restore E2EE state if setup was completed
         var device_id = settings.get_string ("device-id");
-        if (device_id != "") {
+        var user_id = settings.get_string ("matrix-user-id");
+        var pickle_key = settings.get_string ("e2ee-pickle-key");
+
+        if (device_id != "" && user_id != "" && pickle_key != "") {
             enc_svc.device_id = device_id;
-            enc_svc.user_id = ""; // Will be set from access token
+            enc_svc.user_id = user_id;
+            if (enc_svc.initialize (pickle_key)) {
+                enc_svc.restore_group_session ();
+                debug ("E2EE initialized (session: %s)", enc_svc.megolm_session_id);
+            } else {
+                warning ("E2EE initialization failed, messages will be unencrypted");
+            }
         }
         matrix_svc.encryption = enc_svc;
 

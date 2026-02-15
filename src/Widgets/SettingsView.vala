@@ -256,7 +256,9 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         // Save credentials
         settings.set_string ("matrix-homeserver-url", hs_url);
         settings.set_string ("matrix-access-token", token);
+        settings.set_string ("matrix-user-id", _matrix_svc.last_user_id);
         settings.set_string ("partner-matrix-id", partner_id);
+        settings.set_string ("e2ee-pickle-key", e2ee_password);
         set_status ("Creating encrypted room...", false);
 
         // Step 3: Create encrypted room with partner
