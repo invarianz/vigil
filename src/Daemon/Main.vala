@@ -97,11 +97,6 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         start_watchdog ();
     }
 
-    protected override bool dbus_register (DBusConnection connection, string object_path) throws Error {
-        base.dbus_register (connection, object_path);
-        return true;
-    }
-
     protected override void activate () {
         // Service mode: nothing to activate visually
         debug ("Vigil daemon activated");

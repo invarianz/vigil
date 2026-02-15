@@ -9,6 +9,7 @@ vigil takes screenshots of your screen at random intervals and sends them to you
 - Random-interval screenshots that cannot be predicted
 - Dual backend: XDG Desktop Portal (Wayland) and Gala D-Bus (X11)
 - **Native E2EE**: built-in Olm/Megolm encryption via libolm -- no external proxy needed
+- **Encrypted attachments**: screenshots are AES-256-CTR encrypted before upload per the Matrix spec -- the homeserver never sees plaintext images
 - **One-button setup**: enter homeserver, username, password, partner ID, and E2EE password -- one click does login, room creation, key exchange, and encryption setup
 - **Matrix transport**: sends screenshots to a private encrypted chat room -- no third-party server sees your data
 - Queues screenshots for delivery when offline, retries on startup
@@ -22,18 +23,57 @@ vigil takes screenshots of your screen at random intervals and sends them to you
 
 vigil runs as two processes:
 
-- **vigil-daemon**: headless systemd service that takes screenshots, encrypts them with Megolm, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
+- **vigil-daemon**: headless systemd service that takes screenshots, encrypts them, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
 - **vigil GUI**: thin GTK4 app that connects to the daemon over D-Bus. Shows status and settings. Handles one-time setup (login, room creation, E2EE initialization).
 
-### E2EE flow
+### Encryption scheme
 
-1. GUI creates an OlmAccount and uploads device keys to the homeserver
-2. A Megolm outbound group session is created for room encryption
-3. Partner's device keys are queried and one-time keys claimed
-4. The Megolm room key is Olm-encrypted per-device and sent via to-device messages
-5. All outgoing messages and screenshots are Megolm-encrypted
-6. Crypto state is pickled (encrypted with the E2EE password) and persisted to disk
-7. The daemon restores the pickled state on startup and continues encrypting
+vigil implements the full Matrix E2EE stack natively, with no dependency on external encryption proxies like pantalaimon.
+
+#### Key hierarchy
+
+```
+E2EE Password (user-provided)
+  └─ Pickle key: encrypts all libolm state at rest on disk
+
+OlmAccount (per-device, long-lived)
+  ├─ Ed25519 identity key: signs device keys and messages
+  ├─ Curve25519 identity key: used for Olm key agreement
+  └─ One-time keys (Curve25519): consumed during Olm session setup
+
+Megolm outbound group session (per-room, long-lived)
+  └─ Session key: shared with partner devices via Olm-encrypted to-device messages
+      └─ Ratchets forward after each message (forward secrecy within the session)
+
+AES-256-CTR key (per-attachment, ephemeral)
+  └─ Fresh random 256-bit key + 128-bit IV generated for each screenshot
+```
+
+#### What happens when a screenshot is taken
+
+1. **Screenshot capture**: vigil captures the screen via XDG Desktop Portal (Wayland) or Gala D-Bus (X11)
+2. **File encryption (AES-256-CTR)**: the PNG file is encrypted with a fresh random 256-bit AES key and 128-bit IV using OpenSSL's EVP API. A SHA-256 hash of the ciphertext is computed (also via OpenSSL) for integrity verification. The homeserver only ever receives opaque encrypted bytes.
+3. **Upload**: the encrypted blob is uploaded to the Matrix content repository as `application/octet-stream`
+4. **Event encryption (Megolm)**: the event JSON (containing the `mxc://` URL, JWK decryption key, IV, and SHA-256 hash) is encrypted with the room's Megolm outbound group session
+5. **Send**: the `m.room.encrypted` event is sent to the room. Only devices that received the Megolm session key can decrypt the event, and only then can they decrypt the attachment.
+
+#### E2EE setup flow (one-time)
+
+1. GUI creates an OlmAccount and uploads Ed25519 + Curve25519 device keys to the homeserver
+2. 50 signed one-time keys (Curve25519) are uploaded for Olm session bootstrapping
+3. A Megolm outbound group session is created for room encryption
+4. Partner's device keys are queried via `/keys/query` and one-time keys claimed via `/keys/claim`
+5. An Olm session is established with each partner device using Curve25519 key agreement
+6. The Megolm room key (`m.room_key`) is Olm-encrypted per-device and sent via `/sendToDevice`
+7. All crypto state is pickled (encrypted with the E2EE password) and persisted to `~/.local/share/io.github.invarianz.vigil/crypto/`
+8. The daemon restores the pickled state on startup and continues encrypting
+
+#### Security hardening
+
+- **No unencrypted fallback**: if E2EE is configured but encryption fails, messages are dropped rather than sent in plaintext
+- **CSPRNG only**: all random material comes from `/dev/urandom` via a cached file descriptor. If the CSPRNG becomes unavailable, the daemon aborts rather than falling back to a weak PRNG
+- **Restrictive file permissions**: the crypto directory is `0700`, pickle files are `0600`, and screenshot directories are `0700`
+- **Hardware-accelerated crypto**: AES-256-CTR encryption and SHA-256 hashing use OpenSSL's EVP API, which automatically uses hardware acceleration (AES-NI, SHA-NI) when available
 
 ## How Wayland screenshots work
 
@@ -44,7 +84,8 @@ On Wayland, vigil uses the XDG Desktop Portal Screenshot interface. The first ti
 ```bash
 # Install dependencies (elementary OS 8 / Ubuntu 24.04)
 sudo apt install valac meson libgranite-7-dev libgtk-4-dev \
-  libjson-glib-dev libsoup-3.0-dev libportal-dev libportal-gtk4-dev libolm-dev
+  libjson-glib-dev libsoup-3.0-dev libportal-dev libportal-gtk4-dev \
+  libolm-dev libssl-dev
 
 # Build
 meson setup build

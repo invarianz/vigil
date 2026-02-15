@@ -83,17 +83,10 @@ public class Vigil.Services.EncryptionService : Object {
     public bool initialize (string pickle_key) {
         _pickle_key = pickle_key;
 
-        // Ensure crypto directory exists
-        var dir = File.new_for_path (_crypto_dir);
-        try {
-            dir.make_directory_with_parents (null);
-        } catch (Error e) {
-            // Directory may already exist
-            if (!(e is IOError.EXISTS)) {
-                warning ("Cannot create crypto dir: %s", e.message);
-                return false;
-            }
-        }
+        // Ensure crypto directory exists with restrictive permissions (0700)
+        DirUtils.create_with_parents (_crypto_dir, 0700);
+        // Enforce permissions even if directory already existed with wrong mode
+        FileUtils.chmod (_crypto_dir, 0700);
 
         // Allocate OlmAccount
         _account_buf = new uint8[Olm.account_size ()];
@@ -263,9 +256,10 @@ public class Vigil.Services.EncryptionService : Object {
             return false;
         }
 
-        // Get session ID
+        // Get session ID (+ 1 for null terminator; libolm does not null-terminate)
         var id_len = Olm.outbound_group_session_id_length (_group_session);
-        var id_buf = new uint8[id_len];
+        var id_buf = new uint8[id_len + 1];
+        id_buf[id_len] = 0;
         Olm.outbound_group_session_id (_group_session, id_buf, id_len);
         megolm_session_id = (string) id_buf;
 
@@ -286,7 +280,8 @@ public class Vigil.Services.EncryptionService : Object {
         }
 
         var key_len = Olm.outbound_group_session_key_length (_group_session);
-        var key_buf = new uint8[key_len];
+        var key_buf = new uint8[key_len + 1];
+        key_buf[key_len] = 0;
         var result = Olm.outbound_group_session_key (_group_session, key_buf, key_len);
         if (result == Olm.error_val ()) {
             warning ("Failed to get Megolm session key: %s",
@@ -783,6 +778,7 @@ public class Vigil.Services.EncryptionService : Object {
         var pickle_path = Path.build_filename (_crypto_dir, "account.pickle");
         try {
             FileUtils.set_contents (pickle_path, (string) pickle_buf);
+            FileUtils.chmod (pickle_path, 0600);
         } catch (Error e) {
             warning ("Failed to save account pickle: %s", e.message);
         }
@@ -842,6 +838,7 @@ public class Vigil.Services.EncryptionService : Object {
         var pickle_path = Path.build_filename (_crypto_dir, "megolm_outbound.pickle");
         try {
             FileUtils.set_contents (pickle_path, (string) pickle_buf);
+            FileUtils.chmod (pickle_path, 0600);
         } catch (Error e) {
             warning ("Failed to save Megolm pickle: %s", e.message);
         }
@@ -849,6 +846,9 @@ public class Vigil.Services.EncryptionService : Object {
 
     /**
      * Generate cryptographic random bytes using a cached /dev/urandom fd.
+     *
+     * Aborts on failure -- falling back to a non-CSPRNG would silently
+     * compromise all generated keys, IVs, and Olm randomness.
      */
     private uint8[] generate_random (size_t length) {
         var buf = new uint8[length];
@@ -861,11 +861,8 @@ public class Vigil.Services.EncryptionService : Object {
             size_t bytes_read;
             _urandom_stream.read_all (buf, out bytes_read, null);
         } catch (Error e) {
-            // Fallback to GLib random
-            warning ("Failed to read /dev/urandom, using GLib.Random: %s", e.message);
-            for (size_t i = 0; i < length; i++) {
-                buf[i] = (uint8) GLib.Random.int_range (0, 256);
-            }
+            error ("CRITICAL: Failed to read /dev/urandom: %s. " +
+                   "Refusing to generate weak random data.", e.message);
         }
 
         return buf;

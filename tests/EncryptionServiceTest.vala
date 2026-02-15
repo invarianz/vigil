@@ -491,6 +491,49 @@ void test_megolm_session_restore () {
     }
 }
 
+uint32 get_unix_mode (string path) {
+    try {
+        var file = File.new_for_path (path);
+        var info = file.query_info ("unix::mode", FileQueryInfoFlags.NONE, null);
+        return info.get_attribute_uint32 ("unix::mode") & 0777;
+    } catch (Error e) {
+        warning ("Cannot stat %s: %s", path, e.message);
+        return 0xFFFF;
+    }
+}
+
+void test_crypto_dir_permissions () {
+    clean_crypto_dir ();
+    var svc = new Vigil.Services.EncryptionService ();
+    svc.user_id = "@test:matrix.org";
+    svc.device_id = "TESTDEVICE";
+    svc.initialize ("test-pickle-key");
+
+    // Crypto directory should be 0700 (owner-only)
+    assert_true (get_unix_mode (crypto_dir) == 0700);
+
+    svc.cleanup ();
+}
+
+void test_pickle_file_permissions () {
+    clean_crypto_dir ();
+    var svc = new Vigil.Services.EncryptionService ();
+    svc.user_id = "@test:matrix.org";
+    svc.device_id = "TESTDEVICE";
+    svc.initialize ("test-pickle-key");
+    svc.create_outbound_group_session ();
+
+    // Account pickle should be 0600 (owner read/write only)
+    var account_pickle = Path.build_filename (crypto_dir, "account.pickle");
+    assert_true (get_unix_mode (account_pickle) == 0600);
+
+    // Megolm pickle should also be 0600
+    var megolm_pickle = Path.build_filename (crypto_dir, "megolm_outbound.pickle");
+    assert_true (get_unix_mode (megolm_pickle) == 0600);
+
+    svc.cleanup ();
+}
+
 public static int main (string[] args) {
     // Set XDG_DATA_HOME ONCE before Test.init caches it
     test_data_dir = Path.build_filename (
@@ -524,6 +567,8 @@ public static int main (string[] args) {
     Test.add_func ("/encryption/encrypt_attachment_large_file", test_encrypt_attachment_large_file);
     Test.add_func ("/encryption/base64url_encoding", test_base64url_encoding);
     Test.add_func ("/encryption/base64_unpadded", test_base64_unpadded);
+    Test.add_func ("/encryption/crypto_dir_permissions", test_crypto_dir_permissions);
+    Test.add_func ("/encryption/pickle_file_permissions", test_pickle_file_permissions);
 
     var result = Test.run ();
 

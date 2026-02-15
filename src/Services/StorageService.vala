@@ -61,6 +61,8 @@ public class Vigil.Services.StorageService : Object {
             if (!dir.query_exists ()) {
                 dir.make_directory_with_parents (null);
             }
+            // Screenshots may contain sensitive content -- restrict access
+            FileUtils.chmod (dir_path, 0700);
         }
     }
 

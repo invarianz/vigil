@@ -253,6 +253,30 @@ void test_storage_cleanup_preserves_pending () {
     teardown_test_dir ();
 }
 
+void test_storage_directory_permissions () {
+    setup_test_dir ();
+    var svc = new Vigil.Services.StorageService (test_base_dir);
+    try { svc.initialize (); } catch (Error e) { assert_not_reached (); }
+
+    // All storage directories should be 0700 (owner-only)
+    var dirs = new string[] {
+        svc.screenshots_dir,
+        svc.pending_dir
+    };
+    foreach (var dir_path in dirs) {
+        try {
+            var file = File.new_for_path (dir_path);
+            var info = file.query_info ("unix::mode", FileQueryInfoFlags.NONE, null);
+            var mode = info.get_attribute_uint32 ("unix::mode") & 0777;
+            assert_true (mode == 0700);
+        } catch (Error e) {
+            assert_not_reached ();
+        }
+    }
+
+    teardown_test_dir ();
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -265,6 +289,7 @@ public static int main (string[] args) {
     Test.add_func ("/storage/get_pending_ignores_missing", test_storage_get_pending_ignores_missing_files);
     Test.add_func ("/storage/cleanup_max", test_storage_cleanup_respects_max);
     Test.add_func ("/storage/cleanup_preserves_pending", test_storage_cleanup_preserves_pending);
+    Test.add_func ("/storage/directory_permissions", test_storage_directory_permissions);
 
     return Test.run ();
 }

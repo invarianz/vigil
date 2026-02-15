@@ -584,44 +584,6 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
-     * Upload a file to the Matrix content repository.
-     *
-     * @param file_path Path to the file to upload.
-     * @return The mxc:// content URI, or null on failure.
-     */
-    public async string? upload_media (string file_path) {
-        if (!is_configured) {
-            return null;
-        }
-
-        try {
-            var file = File.new_for_path (file_path);
-            if (!file.query_exists ()) {
-                screenshot_send_failed (file_path, "File not found: %s".printf (file_path));
-                return null;
-            }
-
-            var file_info = yield file.query_info_async (
-                "standard::size",
-                FileQueryInfoFlags.NONE,
-                Priority.DEFAULT,
-                null
-            );
-            var file_size = file_info.get_size ();
-
-            var input_stream = yield file.read_async (Priority.DEFAULT, null);
-            var bytes = yield input_stream.read_bytes_async ((size_t) file_size, Priority.DEFAULT, null);
-            input_stream.close ();
-
-            var filename = Path.get_basename (file_path);
-            return yield upload_bytes (bytes, "image/png", filename);
-        } catch (Error e) {
-            warning ("Matrix media upload error: %s", e.message);
-            return null;
-        }
-    }
-
-    /**
      * Send a room event to the configured room.
      *
      * If an EncryptionService is set, the event is encrypted before sending.
@@ -645,7 +607,8 @@ public class Vigil.Services.MatrixTransportService : Object {
                 actual_type = "m.room.encrypted";
                 actual_content = encrypted;
             } else {
-                warning ("E2EE encryption failed, sending unencrypted");
+                warning ("E2EE encryption failed; refusing to send unencrypted");
+                return null;
             }
         }
 
