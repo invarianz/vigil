@@ -138,9 +138,10 @@ public class Vigil.Services.HeartbeatService : Object {
         var hours = uptime / 3600;
         var minutes = (uptime % 3600) / 60;
 
-        var message = "STATUS: Vigil going offline (clean shutdown, this is normal) | uptime was: %lldh %lldm | pending: %d".printf (
-            hours, minutes, pending_upload_count
-        );
+        var message = (
+            "STATUS: Vigil going offline (clean shutdown, this is normal)" +
+            " | uptime was: %lldh %lldm | pending: %d"
+        ).printf (hours, minutes, pending_upload_count);
 
         yield _matrix_svc.send_text_message (message);
     }
@@ -178,7 +179,9 @@ public class Vigil.Services.HeartbeatService : Object {
             // If elapsed is more than 2x the interval, there was a gap
             if (elapsed_sec > expected_sec * 2) {
                 var gap_min = elapsed_sec / 60;
-                sb.append (" | resumed after %lldm gap (device was asleep or offline, this is normal)".printf (gap_min));
+                var gap_msg = " | resumed after %lldm gap".printf (gap_min) +
+                    " (device was asleep or offline, this is normal)";
+                sb.append (gap_msg);
             }
         }
 

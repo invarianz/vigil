@@ -65,6 +65,9 @@ public class Vigil.Services.SchedulerService : Object {
 
     /**
      * Calculate a random interval in seconds between min and max.
+     *
+     * Uses /dev/urandom (CSPRNG) so the schedule cannot be predicted
+     * even by an adversary who observes past screenshot timestamps.
      */
     public int get_random_interval () {
         if (min_interval_seconds >= max_interval_seconds) {
@@ -72,7 +75,24 @@ public class Vigil.Services.SchedulerService : Object {
         }
 
         int range = max_interval_seconds - min_interval_seconds;
-        return min_interval_seconds + (int) (Random.next_int () % (range + 1));
+        uint32 rand_val = 0;
+
+        try {
+            uint8[] buf = new uint8[4];
+            size_t bytes_read;
+            var stream = File.new_for_path ("/dev/urandom").read (null);
+            stream.read_all (buf, out bytes_read, null);
+            stream.close (null);
+            rand_val = ((uint32) buf[0] << 24) |
+                       ((uint32) buf[1] << 16) |
+                       ((uint32) buf[2] << 8) |
+                       (uint32) buf[3];
+        } catch (Error e) {
+            warning ("CSPRNG unavailable: %s", e.message);
+            rand_val = Random.next_int ();
+        }
+
+        return min_interval_seconds + (int) (rand_val % (range + 1));
     }
 
     private void schedule_next () {

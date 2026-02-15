@@ -65,6 +65,12 @@ public class Vigil.Services.MatrixTransportService : Object {
         return url;
     }
 
+    private static string safe_log (string? resp) {
+        if (resp == null) return "";
+        if (resp.length > 200) return resp.substring (0, 200) + "[truncated]";
+        return resp;
+    }
+
     construct {
         _session = new Soup.Session () {
             timeout = 30,
@@ -187,7 +193,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             if (status != Soup.Status.OK) {
                 var resp = (string) response_bytes.get_data ();
-                warning ("Matrix login failed (HTTP %u): %s", status, resp ?? "");
+                warning ("Matrix login failed (HTTP %u): %s", status, safe_log (resp));
                 return null;
             }
 
@@ -306,7 +312,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             if (status != Soup.Status.OK) {
                 var resp = (string) response_bytes.get_data ();
-                warning ("Matrix room creation failed (HTTP %u): %s", status, resp ?? "");
+                warning ("Matrix room creation failed (HTTP %u): %s", status, safe_log (resp));
                 return null;
             }
 
@@ -360,7 +366,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             if (status != Soup.Status.OK) {
                 var resp = (string) response_bytes.get_data ();
-                warning ("Keys upload failed (HTTP %u): %s", status, resp ?? "");
+                warning ("Keys upload failed (HTTP %u): %s", status, safe_log (resp));
                 return false;
             }
 
@@ -418,7 +424,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             if (status != Soup.Status.OK) {
                 var resp = (string) response_bytes.get_data ();
-                warning ("Keys query failed (HTTP %u): %s", status, resp ?? "");
+                warning ("Keys query failed (HTTP %u): %s", status, safe_log (resp));
                 return null;
             }
 
@@ -480,7 +486,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             if (status != Soup.Status.OK) {
                 var resp = (string) response_bytes.get_data ();
-                warning ("Keys claim failed (HTTP %u): %s", status, resp ?? "");
+                warning ("Keys claim failed (HTTP %u): %s", status, safe_log (resp));
                 return null;
             }
 
@@ -507,9 +513,12 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         try {
             var txn_id = generate_txn_id ();
+            var encoded_type = GLib.Uri.escape_string (
+                event_type, null, true
+            );
             var url = "%s/_matrix/client/v3/sendToDevice/%s/%s".printf (
                 homeserver_url,
-                event_type,
+                encoded_type,
                 txn_id
             );
 
@@ -530,7 +539,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             if (status != Soup.Status.OK) {
                 var resp = (string) response_bytes.get_data ();
-                warning ("To-device send failed (HTTP %u): %s", status, resp ?? "");
+                warning ("To-device send failed (HTTP %u): %s", status, safe_log (resp));
                 return false;
             }
 
@@ -571,7 +580,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             if (status != Soup.Status.OK) {
                 var resp = (string) response_bytes.get_data ();
-                warning ("Matrix media upload failed (HTTP %u): %s", status, resp ?? "");
+                warning ("Matrix media upload failed (HTTP %u): %s", status, safe_log (resp));
                 return null;
             }
 
@@ -624,10 +633,13 @@ public class Vigil.Services.MatrixTransportService : Object {
             var txn_id = generate_txn_id ();
             var encoded_room = GLib.Uri.escape_string (room_id, null, true);
 
+            var encoded_type = GLib.Uri.escape_string (
+                actual_type, null, true
+            );
             var url = "%s/_matrix/client/v3/rooms/%s/send/%s/%s".printf (
                 homeserver_url,
                 encoded_room,
-                actual_type,
+                encoded_type,
                 txn_id
             );
 
@@ -645,7 +657,7 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             if (status != Soup.Status.OK) {
                 var resp = (string) response_bytes.get_data ();
-                warning ("Matrix send event failed (HTTP %u): %s", status, resp ?? "");
+                warning ("Matrix send event failed (HTTP %u): %s", status, safe_log (resp));
                 return null;
             }
 

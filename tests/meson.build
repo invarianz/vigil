@@ -20,6 +20,9 @@ test_env.set('GSETTINGS_SCHEMA_DIR', meson.current_build_dir())
 # Use memory backend so tests don't persist to dconf
 test_env.set('GSETTINGS_BACKEND', 'memory')
 
+# Shared test utilities
+test_utils = files('TestUtils.vala')
+
 # Unit tests -- pure logic, no display server needed
 unit_tests = {
     'SessionDetector': 'SessionDetectorTest.vala',
@@ -35,6 +38,7 @@ foreach name, source : unit_tests
     test_exe = executable(
         name + '_test',
         source,
+        test_utils,
         dependencies: [vigil_service_dep],
         install: false,
     )
@@ -55,6 +59,7 @@ foreach name, source : integration_tests
     test_exe = executable(
         name + '_test',
         source,
+        test_utils,
         dependencies: [vigil_service_dep],
         install: false,
     )
@@ -70,6 +75,7 @@ endforeach
 dbus_test_exe = executable(
     'DBusServer_test',
     'DBusServerTest.vala',
+    test_utils,
     files(meson.project_source_root() / 'src' / 'Daemon' / 'DBusInterface.vala'),
     dependencies: [vigil_service_dep, json_dep],
     install: false,
@@ -85,6 +91,7 @@ test('DBusServer', dbus_test_exe,
 benchmark_exe = executable(
     'PerformanceBenchmark_test',
     'PerformanceBenchmark.vala',
+    test_utils,
     dependencies: [vigil_service_dep],
     install: false,
 )

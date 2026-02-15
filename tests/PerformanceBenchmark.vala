@@ -170,7 +170,9 @@ void bench_megolm_encrypt_plus_save () {
 
 void bench_encrypt_event () {
     var svc = make_enc_service ();
-    var content = "{\"msgtype\":\"m.image\",\"body\":\"Screenshot 2025-01-01\",\"url\":\"mxc://test/abc\",\"info\":{\"mimetype\":\"image/png\"}}";
+    var content =
+        "{\"msgtype\":\"m.image\",\"body\":\"Screenshot 2025-01-01\"," +
+        "\"url\":\"mxc://test/abc\",\"info\":{\"mimetype\":\"image/png\"}}";
 
     bench ("encrypt_event (JSON + Megolm + JSON)", 500, () => {
         svc.encrypt_event ("!room:test", "m.room.message", content);
@@ -445,7 +447,9 @@ void bench_full_pipeline_no_network () {
     try { store.initialize (); } catch (Error e) {}
 
     var enc = make_enc_service ();
-    var content = "{\"msgtype\":\"m.image\",\"body\":\"Screenshot\",\"url\":\"mxc://test/abc\",\"info\":{\"mimetype\":\"image/png\"}}";
+    var content =
+        "{\"msgtype\":\"m.image\",\"body\":\"Screenshot\"," +
+        "\"url\":\"mxc://test/abc\",\"info\":{\"mimetype\":\"image/png\"}}";
 
     bench ("pipeline: event-only (no attachment enc)", 200, () => {
         var path = store.generate_screenshot_path ();
@@ -827,22 +831,6 @@ public static int main (string[] args) {
 
     print ("\n══════════════════════════════════════════════════════════════════════════════\n");
 
-    delete_directory_recursive (bench_data_dir);
+    TestUtils.delete_directory_recursive (bench_data_dir);
     return 0;
-}
-
-void delete_directory_recursive (string path) {
-    try {
-        var dir = Dir.open (path);
-        string? name;
-        while ((name = dir.read_name ()) != null) {
-            var child_path = Path.build_filename (path, name);
-            if (FileUtils.test (child_path, FileTest.IS_DIR)) {
-                delete_directory_recursive (child_path);
-            } else {
-                FileUtils.remove (child_path);
-            }
-        }
-        DirUtils.remove (path);
-    } catch (Error e) {}
 }

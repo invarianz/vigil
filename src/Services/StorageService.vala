@@ -74,7 +74,7 @@ public class Vigil.Services.StorageService : Object {
     public string generate_screenshot_path () {
         var now = new DateTime.now_local ();
         var timestamp = now.format ("%Y%m%d_%H%M%S");
-        var random_suffix = "%04x".printf (Random.next_int () % 0xFFFF);
+        var random_suffix = GLib.Uuid.string_random ().substring (0, 4);
         var filename = "vigil_%s_%s.png".printf (timestamp, random_suffix);
         return Path.build_filename (screenshots_dir, filename);
     }

@@ -17,32 +17,11 @@
 static string test_storage_dir;
 
 void setup_storage () {
-    test_storage_dir = Path.build_filename (
-        Environment.get_tmp_dir (),
-        "vigil-dbus-test-%s".printf (GLib.Uuid.string_random ().substring (0, 8))
-    );
+    test_storage_dir = TestUtils.make_test_dir ();
 }
 
 void cleanup_storage () {
-    delete_directory_recursive (test_storage_dir);
-}
-
-void delete_directory_recursive (string path) {
-    try {
-        var dir = Dir.open (path);
-        string? name;
-        while ((name = dir.read_name ()) != null) {
-            var child = Path.build_filename (path, name);
-            if (FileUtils.test (child, FileTest.IS_DIR)) {
-                delete_directory_recursive (child);
-            } else {
-                FileUtils.unlink (child);
-            }
-        }
-        DirUtils.remove (path);
-    } catch (Error e) {
-        // best-effort
-    }
+    TestUtils.delete_directory_recursive (test_storage_dir);
 }
 
 /**

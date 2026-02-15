@@ -281,8 +281,8 @@ public class Vigil.Services.TamperDetectionService : Object {
             if (actual_hash != expected_binary_hash) {
                 emit_tamper ("binary_modified",
                     "Daemon binary hash mismatch (expected %s, got %s)".printf (
-                        expected_binary_hash.substring (0, 16) + "...",
-                        actual_hash.substring (0, 16) + "..."));
+                        expected_binary_hash.substring (0, 16) + "\u2026",
+                        actual_hash.substring (0, 16) + "\u2026"));
             }
         } catch (Error e) {
             emit_tamper ("binary_unreadable",

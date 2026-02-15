@@ -286,7 +286,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         }
 
         setup_button.sensitive = false;
-        set_status ("Discovering homeserver...", false);
+        set_status ("Discovering homeserver\u2026", false);
 
         run_setup.begin (hs_input, username, password, partner_id, e2ee_password);
     }
@@ -300,7 +300,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             setup_button.sensitive = true;
             return;
         }
-        set_status ("Logging in to %s...".printf (hs_url), false);
+        set_status ("Logging in to %s\u2026".printf (hs_url), false);
 
         // Step 2: Login
         var token = yield _matrix_svc.login (hs_url, username, password);
@@ -316,7 +316,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         settings.set_string ("matrix-user-id", _matrix_svc.last_user_id);
         settings.set_string ("partner-matrix-id", partner_id);
         settings.set_string ("e2ee-pickle-key", e2ee_password);
-        set_status ("Creating encrypted room...", false);
+        set_status ("Creating encrypted room\u2026", false);
 
         // Step 3: Create encrypted room with partner
         var new_room_id = yield _matrix_svc.create_encrypted_room (partner_id);
@@ -326,7 +326,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             return;
         }
         settings.set_string ("matrix-room-id", new_room_id);
-        set_status ("Setting up E2EE...", false);
+        set_status ("Setting up E2EE\u2026", false);
 
         // Step 4: Initialize E2EE
         var enc_svc = new Vigil.Services.EncryptionService ();
@@ -369,17 +369,22 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
      */
     private string generate_unlock_code () {
         const string CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        // Rejection limit: floor(256 / 31) * 31 = 248
+        const uint8 LIMIT = 248;
         var code = new StringBuilder ();
 
         try {
             var urandom = File.new_for_path ("/dev/urandom");
             var stream = new DataInputStream (urandom.read (null));
             for (int i = 0; i < 6; i++) {
-                code.append_c (CHARS[stream.read_byte (null) % CHARS.length]);
+                uint8 b = stream.read_byte (null);
+                while (b >= LIMIT) {
+                    b = stream.read_byte (null);
+                }
+                code.append_c (CHARS[b % CHARS.length]);
             }
             stream.close (null);
         } catch (Error e) {
-            // Should never happen; /dev/urandom is always available on Linux
             warning ("Failed to read /dev/urandom: %s", e.message);
             return "ERRGEN";
         }
@@ -403,7 +408,11 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         settings.set_boolean ("settings-locked", true);
 
         // Send the unlock code to the partner via Matrix
-        var message = "Settings are now locked. Unlock code: %s -- Keep this code. The user will need it from you to change any settings.".printf (code);
+        var message = (
+            "Settings are now locked. Unlock code: %s" +
+            " -- Keep this code. The user will need it from you" +
+            " to change any settings."
+        ).printf (code);
         yield _matrix_svc.send_text_message (message);
 
         update_lock_ui ();
@@ -456,7 +465,9 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         lock_box.visible = true;
 
         if (locked) {
-            lock_status_label.label = "Settings are locked. Ask your accountability partner for the unlock code to make changes.";
+            lock_status_label.label =
+                "Settings are locked. Ask your accountability partner" +
+                " for the unlock code to make changes.";
             lock_status_label.remove_css_class ("error");
             unlock_entry.visible = true;
             unlock_button.visible = true;

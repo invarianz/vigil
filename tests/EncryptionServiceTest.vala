@@ -573,25 +573,7 @@ public static int main (string[] args) {
     var result = Test.run ();
 
     // Cleanup
-    delete_directory_recursive (test_data_dir);
+    TestUtils.delete_directory_recursive (test_data_dir);
 
     return result;
-}
-
-void delete_directory_recursive (string path) {
-    try {
-        var dir = Dir.open (path);
-        string? name;
-        while ((name = dir.read_name ()) != null) {
-            var child_path = Path.build_filename (path, name);
-            if (FileUtils.test (child_path, FileTest.IS_DIR)) {
-                delete_directory_recursive (child_path);
-            } else {
-                FileUtils.remove (child_path);
-            }
-        }
-        DirUtils.remove (path);
-    } catch (Error e) {
-        // Ignore cleanup errors
-    }
 }

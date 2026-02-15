@@ -13,33 +13,12 @@
 string test_base_dir;
 
 void setup_test_dir () {
-    test_base_dir = Path.build_filename (
-        Environment.get_tmp_dir (),
-        "vigil-tamper-test-%s".printf (GLib.Uuid.string_random ().substring (0, 8))
-    );
+    test_base_dir = TestUtils.make_test_dir ();
     DirUtils.create_with_parents (test_base_dir, 0755);
 }
 
 void teardown_test_dir () {
-    delete_directory_recursive (test_base_dir);
-}
-
-void delete_directory_recursive (string path) {
-    try {
-        var dir = Dir.open (path);
-        string? name;
-        while ((name = dir.read_name ()) != null) {
-            var child_path = Path.build_filename (path, name);
-            if (FileUtils.test (child_path, FileTest.IS_DIR)) {
-                delete_directory_recursive (child_path);
-            } else {
-                FileUtils.remove (child_path);
-            }
-        }
-        DirUtils.remove (path);
-    } catch (Error e) {
-        // Ignore cleanup errors in tests
-    }
+    TestUtils.delete_directory_recursive (test_base_dir);
 }
 
 void test_autostart_missing_detected () {
