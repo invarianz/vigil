@@ -43,6 +43,17 @@ config_file = configure_file(
     configuration: conf_data
 )
 
+# All non-GTK dependencies shared by daemon and service library
+service_deps = [
+    glib_dep,
+    gobject_dep,
+    gio_dep,
+    json_dep,
+    soup_dep,
+    portal_dep,
+]
+
+# All dependencies including GTK/Granite (for the GUI app)
 all_dependencies = [
     glib_dep,
     gobject_dep,
@@ -55,7 +66,9 @@ all_dependencies = [
     portal_gtk4_dep,
 ]
 
-# Service/logic sources shared between the app and tests (no GTK UI, no main)
+# ──────────────────────────────────────────────────────────────
+#  Service layer: shared between daemon and tests
+# ──────────────────────────────────────────────────────────────
 service_src_files = files(
     'src' / 'Services' / 'IScreenshotBackend.vala',
     'src' / 'Services' / 'PortalScreenshotBackend.vala',
@@ -64,21 +77,11 @@ service_src_files = files(
     'src' / 'Services' / 'SchedulerService.vala',
     'src' / 'Services' / 'UploadService.vala',
     'src' / 'Services' / 'StorageService.vala',
+    'src' / 'Services' / 'HeartbeatService.vala',
+    'src' / 'Services' / 'TamperDetectionService.vala',
     'src' / 'Utils' / 'SessionDetector.vala',
 )
 
-# Dependencies for service layer (no GTK/Granite needed)
-service_deps = [
-    glib_dep,
-    gobject_dep,
-    gio_dep,
-    json_dep,
-    soup_dep,
-    portal_dep,
-]
-
-# Build the service layer as a static library so it can be shared
-# between the main app and tests without duplicate compilation
 vigil_service_lib = static_library(
     'vigil-services',
     service_src_files,
@@ -95,24 +98,51 @@ vigil_service_dep = declare_dependency(
     ],
 )
 
-# UI source files (need GTK/Granite)
+# ──────────────────────────────────────────────────────────────
+#  Daemon: headless monitoring engine (no GTK)
+# ──────────────────────────────────────────────────────────────
+daemon_src_files = files(
+    'src' / 'Daemon' / 'DBusInterface.vala',
+    'src' / 'Daemon' / 'Main.vala',
+)
+
+executable(
+    app_id + '.daemon',
+    daemon_src_files,
+    config_file,
+    dependencies: [vigil_service_dep, json_dep],
+    install: true,
+)
+
+# ──────────────────────────────────────────────────────────────
+#  GUI: thin D-Bus client (needs GTK/Granite)
+# ──────────────────────────────────────────────────────────────
+# The GUI needs the D-Bus interface definition for the proxy
+gui_dbus_src = files(
+    'src' / 'Daemon' / 'DBusInterface.vala',
+)
+
 ui_src_files = files(
     'src' / 'MainWindow.vala',
     'src' / 'Widgets' / 'StatusView.vala',
     'src' / 'Widgets' / 'SettingsView.vala',
 )
 
-# Build the application executable
 executable(
     app_id,
     ui_src_files,
+    gui_dbus_src,
     config_file,
     'src' / 'Application.vala',
     dependencies: all_dependencies + [vigil_service_dep],
     install: true
 )
 
-# Desktop file
+# ──────────────────────────────────────────────────────────────
+#  Data files
+# ──────────────────────────────────────────────────────────────
+
+# Desktop file (GUI)
 i18n.merge_file(
     input: 'data' / 'vigil.desktop.in',
     output: app_id + '.desktop',
@@ -137,6 +167,25 @@ install_data(
     'data' / 'vigil.gschema.xml',
     install_dir: get_option('datadir') / 'glib-2.0' / 'schemas',
     rename: app_id + '.gschema.xml'
+)
+
+# Systemd user service (substitute @BINDIR@)
+systemd_service_conf = configuration_data()
+systemd_service_conf.set('BINDIR', get_option('prefix') / get_option('bindir'))
+
+configure_file(
+    input: 'data' / 'vigil-daemon.service',
+    output: 'vigil-daemon.service',
+    configuration: systemd_service_conf,
+    install: true,
+    install_dir: get_option('prefix') / 'lib' / 'systemd' / 'user'
+)
+
+# Autostart desktop entry for the daemon
+install_data(
+    'data' / 'vigil-daemon-autostart.desktop',
+    install_dir: get_option('sysconfdir') / 'xdg' / 'autostart',
+    rename: app_id + '.daemon.desktop'
 )
 
 # Compile schemas after install

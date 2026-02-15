@@ -3,26 +3,23 @@
  * SPDX-FileCopyrightText: 2025 invarianz
  */
 
+/**
+ * Main window -- now a D-Bus client of the daemon.
+ *
+ * Reads status from the daemon proxy and displays it.
+ * Settings are changed via GSettings (which the daemon also watches).
+ */
 public class Vigil.MainWindow : Gtk.ApplicationWindow {
 
     private GLib.Settings settings;
     private Vigil.Widgets.StatusView status_view;
     private Vigil.Widgets.SettingsView settings_view;
     private Granite.Toast toast;
+    private Vigil.Daemon.IDaemonBus? _daemon;
+    private Gtk.Label daemon_status_label;
+    private uint _poll_source = 0;
 
-    /* Services are owned by the Application and passed in */
-    private Vigil.Services.ScreenshotService screenshot_service;
-    private Vigil.Services.SchedulerService scheduler_service;
-    private Vigil.Services.UploadService upload_service;
-    private Vigil.Services.StorageService storage_service;
-
-    public MainWindow (
-        Gtk.Application application,
-        Vigil.Services.ScreenshotService screenshot_service,
-        Vigil.Services.SchedulerService scheduler_service,
-        Vigil.Services.UploadService upload_service,
-        Vigil.Services.StorageService storage_service
-    ) {
+    public MainWindow (Gtk.Application application, Vigil.Daemon.IDaemonBus? daemon_proxy) {
         Object (
             application: application,
             default_height: 600,
@@ -30,13 +27,14 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
             title: "Vigil"
         );
 
-        this.screenshot_service = screenshot_service;
-        this.scheduler_service = scheduler_service;
-        this.upload_service = upload_service;
-        this.storage_service = storage_service;
+        _daemon = daemon_proxy;
 
-        connect_services ();
-        load_state ();
+        if (_daemon != null) {
+            connect_daemon_signals ();
+            refresh_status ();
+        } else {
+            show_daemon_disconnected ();
+        }
     }
 
     construct {
@@ -80,7 +78,17 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
         };
         overlay.add_overlay (toast);
 
-        child = overlay;
+        // Daemon connection status bar
+        daemon_status_label = new Gtk.Label ("") {
+            visible = false
+        };
+        daemon_status_label.add_css_class ("error");
+
+        var main_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+        main_box.append (daemon_status_label);
+        main_box.append (overlay);
+
+        child = main_box;
 
         // Window state persistence
         settings.bind ("window-width", this, "default-width", SettingsBindFlags.DEFAULT);
@@ -92,138 +100,96 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
 
         close_request.connect (() => {
             settings.set_boolean ("window-maximized", maximized);
+            if (_poll_source != 0) {
+                Source.remove (_poll_source);
+                _poll_source = 0;
+            }
             return false;
         });
-    }
 
-    private void connect_services () {
-        // Monitoring toggle
+        // Monitoring toggle changes GSettings, which the daemon watches
         status_view.monitoring_toggled.connect ((active) => {
-            if (active) {
-                scheduler_service.start ();
-            } else {
-                scheduler_service.stop ();
-            }
             settings.set_boolean ("monitoring-enabled", active);
         });
 
-        // Update UI when scheduler changes
-        scheduler_service.scheduler_started.connect (() => {
-            update_next_capture_display ();
-        });
-
-        scheduler_service.scheduler_stopped.connect (() => {
-            status_view.set_next_capture_time (null);
-        });
-
-        // When a capture is requested by the scheduler
-        scheduler_service.capture_requested.connect (() => {
-            handle_capture_request.begin ();
-        });
-
-        // Screenshot events
-        screenshot_service.screenshot_taken.connect ((path) => {
-            status_view.set_last_capture_time (new DateTime.now_local ());
-            update_next_capture_display ();
-        });
-
-        screenshot_service.screenshot_failed.connect ((msg, time) => {
-            toast.title = "Screenshot failed: %s".printf (msg);
-            toast.send_notification ();
-        });
-
-        // Upload events
-        upload_service.upload_succeeded.connect ((path) => {
-            storage_service.mark_uploaded (path);
-            update_pending_count ();
-        });
-
-        upload_service.upload_failed.connect ((path, msg) => {
-            debug ("Upload failed for %s: %s (will retry later)", path, msg);
-        });
-
-        // Refresh pending count every 30 seconds
-        Timeout.add_seconds (30, () => {
-            update_pending_count ();
+        // Poll daemon status periodically (D-Bus signals may be missed in some scenarios)
+        _poll_source = Timeout.add_seconds (5, () => {
+            refresh_status ();
             return Source.CONTINUE;
         });
     }
 
-    private void load_state () {
-        status_view.set_backend_name (screenshot_service.active_backend_name);
-
-        // Restore monitoring state
-        bool monitoring_enabled = settings.get_boolean ("monitoring-enabled");
-        status_view.set_monitoring_active (monitoring_enabled);
-
-        // Bind scheduler intervals from settings
-        scheduler_service.min_interval_seconds = settings.get_int ("min-interval-seconds");
-        scheduler_service.max_interval_seconds = settings.get_int ("max-interval-seconds");
-
-        // Listen for interval setting changes
-        settings.changed["min-interval-seconds"].connect (() => {
-            scheduler_service.min_interval_seconds = settings.get_int ("min-interval-seconds");
-        });
-        settings.changed["max-interval-seconds"].connect (() => {
-            scheduler_service.max_interval_seconds = settings.get_int ("max-interval-seconds");
-        });
-
-        // Bind upload settings
-        upload_service.endpoint_url = settings.get_string ("endpoint-url");
-        upload_service.api_token = settings.get_string ("api-token");
-        upload_service.device_id = get_or_create_device_id ();
-
-        settings.changed["endpoint-url"].connect (() => {
-            upload_service.endpoint_url = settings.get_string ("endpoint-url");
-        });
-        settings.changed["api-token"].connect (() => {
-            upload_service.api_token = settings.get_string ("api-token");
-        });
-
-        // Bind storage settings
-        storage_service.max_local_screenshots = settings.get_int ("max-local-screenshots");
-        settings.changed["max-local-screenshots"].connect (() => {
-            storage_service.max_local_screenshots = settings.get_int ("max-local-screenshots");
-        });
-
-        update_pending_count ();
+    /**
+     * Update the daemon proxy (e.g. after reconnecting).
+     */
+    public void set_daemon_proxy (Vigil.Daemon.IDaemonBus? proxy) {
+        _daemon = proxy;
+        if (_daemon != null) {
+            daemon_status_label.visible = false;
+            connect_daemon_signals ();
+            refresh_status ();
+        } else {
+            show_daemon_disconnected ();
+        }
     }
 
-    private async void handle_capture_request () {
-        var path = storage_service.generate_screenshot_path ();
-        bool success = yield screenshot_service.take_screenshot (path);
+    private void connect_daemon_signals () {
+        _daemon.status_changed.connect (() => {
+            refresh_status ();
+        });
 
-        if (success) {
-            try {
-                storage_service.mark_pending (path);
-            } catch (Error e) {
-                warning ("Failed to mark screenshot as pending: %s", e.message);
+        _daemon.screenshot_captured.connect ((path) => {
+            toast.title = "Screenshot captured";
+            toast.send_notification ();
+            refresh_status ();
+        });
+
+        _daemon.screenshot_capture_failed.connect ((msg) => {
+            toast.title = "Screenshot failed: %s".printf (msg);
+            toast.send_notification ();
+        });
+
+        _daemon.tamper_event.connect ((event_type, details) => {
+            toast.title = "Integrity check: %s".printf (event_type);
+            toast.send_notification ();
+        });
+    }
+
+    private void refresh_status () {
+        if (_daemon == null) {
+            return;
+        }
+
+        try {
+            status_view.set_monitoring_active (_daemon.monitoring_active);
+            status_view.set_backend_name (_daemon.active_backend_name);
+            status_view.set_pending_count (_daemon.pending_upload_count);
+
+            var next_iso = _daemon.next_capture_time_iso;
+            if (next_iso != "") {
+                var next = new DateTime.from_iso8601 (next_iso, new TimeZone.local ());
+                status_view.set_next_capture_time (next);
+            } else {
+                status_view.set_next_capture_time (null);
             }
 
-            // Attempt immediate upload
-            var now = new DateTime.now_local ();
-            yield upload_service.upload (path, now);
-
-            // Clean up old screenshots
-            storage_service.cleanup_old_screenshots ();
+            var last_iso = _daemon.last_capture_time_iso;
+            if (last_iso != "") {
+                var last = new DateTime.from_iso8601 (last_iso, new TimeZone.local ());
+                status_view.set_last_capture_time (last);
+            } else {
+                status_view.set_last_capture_time (null);
+            }
+        } catch (Error e) {
+            debug ("Failed to refresh status from daemon: %s", e.message);
+            show_daemon_disconnected ();
         }
     }
 
-    private void update_next_capture_display () {
-        status_view.set_next_capture_time (scheduler_service.next_capture_time);
-    }
-
-    private void update_pending_count () {
-        var pending = storage_service.get_pending_screenshots ();
-        status_view.set_pending_count ((int) pending.length);
-    }
-
-    private string get_or_create_device_id () {
-        var device_id = settings.get_string ("device-id");
-        if (device_id == "") {
-            device_id = GLib.Uuid.string_random ();
-            settings.set_string ("device-id", device_id);
-        }
-        return device_id;
+    private void show_daemon_disconnected () {
+        daemon_status_label.label = "  Daemon not connected. Is vigil-daemon running?  ";
+        daemon_status_label.visible = true;
+        status_view.set_monitoring_active (false);
+        status_view.set_backend_name ("Daemon offline");
     }
 }

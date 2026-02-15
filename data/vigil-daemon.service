@@ -1,0 +1,19 @@
+[Unit]
+Description=Vigil Accountability Screenshot Daemon
+Documentation=https://github.com/invarianz/vigil
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=io.github.invarianz.vigil.Daemon
+ExecStart=@BINDIR@/io.github.invarianz.vigil.daemon
+Restart=always
+RestartSec=5
+WatchdogSec=120
+
+# Hardening: prevent the user from easily stopping the service
+# (they'd need to run systemctl --user daemon-reload first)
+RefuseManualStop=true
+
+[Install]
+WantedBy=graphical-session.target

@@ -58,5 +58,17 @@
       <default>false</default>
       <summary>Start Vigil at login</summary>
     </key>
+
+    <!-- Heartbeat -->
+    <key name="heartbeat-interval-seconds" type="i">
+      <default>60</default>
+      <summary>Interval between heartbeat pings to the server in seconds</summary>
+    </key>
+
+    <!-- Tamper detection -->
+    <key name="tamper-check-interval-seconds" type="i">
+      <default>120</default>
+      <summary>Interval between tamper detection checks in seconds</summary>
+    </key>
   </schema>
 </schemalist>

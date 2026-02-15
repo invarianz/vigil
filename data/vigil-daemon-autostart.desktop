@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Vigil Daemon
+Comment=Accountability screenshot monitoring daemon
+Exec=io.github.invarianz.vigil.daemon
+Icon=io.github.invarianz.vigil
+Terminal=false
+Type=Application
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Phase=Applications
+NoDisplay=true

@@ -3,12 +3,16 @@
  * SPDX-FileCopyrightText: 2025 invarianz
  */
 
+/**
+ * GTK4 GUI application.
+ *
+ * This is a thin D-Bus client that connects to the Vigil daemon
+ * (io.github.invarianz.vigil.Daemon) and displays status / settings.
+ * All monitoring logic runs in the daemon process.
+ */
 public class Vigil.Application : Gtk.Application {
 
-    private Vigil.Services.ScreenshotService screenshot_service;
-    private Vigil.Services.SchedulerService scheduler_service;
-    private Vigil.Services.UploadService upload_service;
-    private Vigil.Services.StorageService storage_service;
+    private Vigil.Daemon.IDaemonBus? daemon_proxy = null;
 
     public Application () {
         Object (
@@ -47,56 +51,33 @@ public class Vigil.Application : Gtk.Application {
         add_action (quit_action);
         set_accels_for_action ("app.quit", { "<Control>q" });
 
-        // Initialize services
-        screenshot_service = new Vigil.Services.ScreenshotService ();
-        scheduler_service = new Vigil.Services.SchedulerService ();
-        upload_service = new Vigil.Services.UploadService ();
-        storage_service = new Vigil.Services.StorageService ();
-
-        try {
-            storage_service.initialize ();
-        } catch (Error e) {
-            warning ("Failed to initialize storage: %s", e.message);
-        }
-
-        // Initialize screenshot backend asynchronously
-        screenshot_service.initialize.begin ((obj, res) => {
-            screenshot_service.initialize.end (res);
-            debug ("Screenshot service ready, backend: %s",
-                screenshot_service.active_backend_name ?? "none");
-        });
-
-        // Retry pending uploads on startup
-        retry_pending_uploads.begin ();
+        // Connect to the daemon over D-Bus
+        connect_to_daemon.begin ();
     }
 
     protected override void activate () {
         var window = active_window;
         if (window == null) {
-            window = new Vigil.MainWindow (
-                this,
-                screenshot_service,
-                scheduler_service,
-                upload_service,
-                storage_service
-            );
+            window = new Vigil.MainWindow (this, daemon_proxy);
         }
         window.present ();
     }
 
-    /**
-     * On startup, try to upload any screenshots that failed to upload previously.
-     */
-    private async void retry_pending_uploads () {
-        var pending = storage_service.get_pending_screenshots ();
-        if (pending.length == 0) {
-            return;
-        }
+    private async void connect_to_daemon () {
+        try {
+            daemon_proxy = yield Bus.get_proxy<Vigil.Daemon.IDaemonBus> (
+                BusType.SESSION,
+                "io.github.invarianz.vigil.Daemon",
+                "/io/github/invarianz/vigil/Daemon"
+            );
+            debug ("Connected to Vigil daemon over D-Bus");
 
-        debug ("Retrying %d pending uploads", (int) pending.length);
-        for (int i = 0; i < pending.length; i++) {
-            var item = pending[i];
-            yield upload_service.upload (item.file_path, item.capture_time ?? new DateTime.now_local ());
+            // If a window is already showing, update it
+            if (active_window != null) {
+                ((Vigil.MainWindow) active_window).set_daemon_proxy (daemon_proxy);
+            }
+        } catch (Error e) {
+            warning ("Could not connect to Vigil daemon: %s. Is the daemon running?", e.message);
         }
     }
 
