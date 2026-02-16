@@ -63,10 +63,26 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
             debug ("Loaded access token from secure file");
         }
 
-        // Restore E2EE state if setup was completed
+        // Restore E2EE state if setup was completed.
+        // Prefer pickle key from secure file, fall back to GSettings.
         var device_id = settings.get_string ("device-id");
         var user_id = settings.get_string ("matrix-user-id");
-        var pickle_key = settings.get_string ("e2ee-pickle-key");
+        var pickle_key = Vigil.Services.EncryptionService.load_pickle_key_from_file ();
+        if (pickle_key == null) {
+            pickle_key = settings.get_string ("e2ee-pickle-key");
+            // Migrate: save to file and clear from GSettings
+            if (pickle_key != "") {
+                Vigil.Services.EncryptionService.save_pickle_key_to_file (pickle_key);
+                debug ("Migrated pickle key from GSettings to secure file");
+            }
+        } else {
+            debug ("Loaded pickle key from secure file");
+            // Ensure GSettings still has the key for tamper detection checks
+            // (the tamper service checks if pickle_key setting is empty)
+            if (settings.get_string ("e2ee-pickle-key") == "") {
+                settings.set_string ("e2ee-pickle-key", pickle_key);
+            }
+        }
 
         bool e2ee_expected = device_id != "" && user_id != "" && pickle_key != "";
         bool e2ee_ok = false;

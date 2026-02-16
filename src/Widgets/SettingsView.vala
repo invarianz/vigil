@@ -323,8 +323,9 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         settings.set_string ("partner-matrix-id", partner_id);
         settings.set_string ("e2ee-pickle-key", e2ee_password);
 
-        // Also save token to secure file (crypto dir, 0600 permissions)
+        // Also save token and pickle key to secure files (crypto dir, 0600 permissions)
         Vigil.Services.MatrixTransportService.save_access_token_to_file (token);
+        Vigil.Services.EncryptionService.save_pickle_key_to_file (e2ee_password);
         set_status ("Creating encrypted room\u2026", false);
 
         // Step 3: Create encrypted room with partner

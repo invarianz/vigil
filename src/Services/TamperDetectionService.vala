@@ -12,12 +12,15 @@
  *
  * In addition to periodic checks, this service monitors GSettings
  * reactively -- any change to a critical key triggers an immediate check.
+ *
+ * The check interval includes random jitter (75%-125% of base interval)
+ * so an attacker cannot time modifications between predictable checks.
  */
 public class Vigil.Services.TamperDetectionService : Object {
 
     public signal void tamper_detected (string event_type, string details);
 
-    /** How often to run checks, in seconds. */
+    /** How often to run checks, in seconds (base interval before jitter). */
     public int check_interval_seconds { get; set; default = 120; }
 
     /** Whether the detection loop is running. */
@@ -32,8 +35,26 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Expected SHA256 hash of the daemon binary (set at install time). */
     public string expected_binary_hash { get; set; default = ""; }
 
+    /** Path to the screenshots directory (for orphan detection). */
+    public string screenshots_dir { get; set; default = ""; }
+
+    /** Path to the pending markers directory (for orphan detection). */
+    public string pending_dir { get; set; default = ""; }
+
+    /** Maximum capture interval in seconds (for liveness monitoring). */
+    public int max_capture_interval_seconds { get; set; default = 120; }
+
+    /** Monotonic timestamp (usec) of the last successful screenshot capture. */
+    private int64 _last_capture_monotonic = 0;
+
+    /** Whether monitoring has started (to avoid false liveness alerts at startup). */
+    private bool _monitoring_started = false;
+
     private GLib.Settings? _settings = null;
     private uint _timeout_source = 0;
+
+    /** Cached /dev/urandom stream for jitter CSPRNG. */
+    private DataInputStream? _urandom_stream = null;
 
     /**
      * Create a TamperDetectionService.
@@ -85,6 +106,11 @@ public class Vigil.Services.TamperDetectionService : Object {
             _timeout_source = 0;
         }
 
+        if (_urandom_stream != null) {
+            try { _urandom_stream.close (null); } catch (Error e) {}
+            _urandom_stream = null;
+        }
+
         is_running = false;
     }
 
@@ -96,6 +122,94 @@ public class Vigil.Services.TamperDetectionService : Object {
         check_systemd_service ();
         check_settings_sanity ();
         check_binary_integrity ();
+        check_capture_liveness ();
+        check_orphan_screenshots ();
+    }
+
+    /**
+     * Record a successful screenshot capture for liveness monitoring.
+     */
+    public void report_capture_success () {
+        _last_capture_monotonic = GLib.get_monotonic_time ();
+        _monitoring_started = true;
+    }
+
+    /**
+     * Check that screenshots are actually being captured.
+     *
+     * If monitoring is active but no screenshot has been taken within
+     * 2x the maximum capture interval, the screenshot backend may have
+     * failed silently (portal denied, compositor crash, etc.).
+     */
+    public void check_capture_liveness () {
+        if (!_monitoring_started || _last_capture_monotonic == 0) {
+            return;
+        }
+
+        if (_settings != null && !_settings.get_boolean ("monitoring-enabled")) {
+            return;
+        }
+
+        var now = GLib.get_monotonic_time ();
+        var elapsed_sec = (now - _last_capture_monotonic) / 1000000;
+        var threshold = (int64) max_capture_interval_seconds * 2;
+
+        if (elapsed_sec > threshold) {
+            emit_tamper ("capture_stalled",
+                "No screenshot captured in %lld seconds (expected every %d seconds)".printf (
+                    elapsed_sec, max_capture_interval_seconds));
+        }
+    }
+
+    /**
+     * Detect orphan screenshots: files in the screenshots directory
+     * that have no corresponding pending marker and haven't been uploaded.
+     *
+     * If an attacker deletes pending marker files to suppress evidence
+     * upload, these orphaned screenshots will be detected.
+     */
+    public void check_orphan_screenshots () {
+        if (screenshots_dir == "" || pending_dir == "") {
+            return;
+        }
+
+        if (!FileUtils.test (screenshots_dir, FileTest.IS_DIR)) {
+            return;
+        }
+
+        try {
+            var dir = File.new_for_path (screenshots_dir);
+            var enumerator = dir.enumerate_children (
+                "standard::name",
+                FileQueryInfoFlags.NONE,
+                null
+            );
+
+            int orphan_count = 0;
+            FileInfo? info;
+            while ((info = enumerator.next_file (null)) != null) {
+                var name = info.get_name ();
+                if (!name.has_suffix (".png")) {
+                    continue;
+                }
+
+                // Check if a pending marker exists for this file
+                var marker_path = Path.build_filename (pending_dir, name + ".pending");
+                if (!FileUtils.test (marker_path, FileTest.EXISTS)) {
+                    orphan_count++;
+                }
+            }
+
+            // A few orphans are normal (recently uploaded, cleanup pending).
+            // Only alert if there are many, suggesting systematic marker deletion.
+            if (orphan_count > 5) {
+                emit_tamper ("orphan_screenshots",
+                    "%d screenshots have no pending marker (markers may have been deleted)".printf (
+                        orphan_count));
+            }
+        } catch (Error e) {
+            debug ("Could not check for orphan screenshots: %s", e.message);
+        }
     }
 
     /**
@@ -379,12 +493,52 @@ public class Vigil.Services.TamperDetectionService : Object {
         tamper_detected (event_type, details);
     }
 
+    /**
+     * Compute a jittered interval for the next tamper check.
+     *
+     * Adds random jitter of 75%-125% of the base interval using CSPRNG,
+     * so an attacker cannot predict when the next check will run and
+     * time modifications to fall between checks.
+     */
+    private int get_jittered_interval () {
+        int base_interval = check_interval_seconds;
+        int min_val = base_interval * 3 / 4;
+        int max_val = base_interval * 5 / 4;
+
+        if (min_val >= max_val) {
+            return base_interval;
+        }
+
+        int range = max_val - min_val;
+        uint32 rand_val = 0;
+
+        try {
+            if (_urandom_stream == null) {
+                var file = File.new_for_path ("/dev/urandom");
+                _urandom_stream = new DataInputStream (file.read (null));
+            }
+            uint8[] buf = new uint8[4];
+            size_t bytes_read;
+            _urandom_stream.read_all (buf, out bytes_read, null);
+            rand_val = ((uint32) buf[0] << 24) |
+                       ((uint32) buf[1] << 16) |
+                       ((uint32) buf[2] << 8)  |
+                       (uint32) buf[3];
+        } catch (Error e) {
+            debug ("CSPRNG unavailable for jitter: %s", e.message);
+            return base_interval;
+        }
+
+        return min_val + (int) (rand_val % (range + 1));
+    }
+
     private void schedule_next () {
         if (!is_running) {
             return;
         }
 
-        _timeout_source = Timeout.add_seconds ((uint) check_interval_seconds, () => {
+        var interval = get_jittered_interval ();
+        _timeout_source = Timeout.add_seconds ((uint) interval, () => {
             _timeout_source = 0;
             run_all_checks ();
 

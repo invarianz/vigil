@@ -43,6 +43,18 @@ public class Vigil.Services.StorageService : Object {
     /** Cached count of pending screenshots. Use instead of scanning the directory. */
     public int pending_count { get; private set; default = -1; }
 
+    /**
+     * HMAC key for marker file integrity.
+     *
+     * When set, pending markers include an HMAC-SHA256 tag computed over
+     * the marker content (path, timestamp, hash). This prevents an
+     * attacker from modifying the stored hash in a marker to match a
+     * tampered screenshot without knowing the HMAC key.
+     *
+     * Derived from the E2EE pickle key at daemon startup.
+     */
+    public string hmac_key { get; set; default = ""; }
+
     private string _base_dir;
     private int _screenshot_file_count = -1;
 
@@ -100,6 +112,16 @@ public class Vigil.Services.StorageService : Object {
      * can be verified before upload (detects post-capture tampering).
      */
     public void mark_pending (string screenshot_path) throws Error {
+        // Validate that the path is within our screenshots directory
+        // to prevent directory traversal attacks.
+        var abs_path = File.new_for_path (screenshot_path).get_path ();
+        var abs_screenshots_dir = File.new_for_path (screenshots_dir).get_path ();
+        if (abs_path == null || abs_screenshots_dir == null ||
+            !abs_path.has_prefix (abs_screenshots_dir + "/")) {
+            throw new IOError.INVALID_ARGUMENT (
+                "Screenshot path is outside the screenshots directory");
+        }
+
         var basename = Path.get_basename (screenshot_path);
         var marker_path = Path.build_filename (pending_dir, basename + ".pending");
         var marker = File.new_for_path (marker_path);
@@ -116,9 +138,18 @@ public class Vigil.Services.StorageService : Object {
             debug ("Could not hash screenshot for integrity: %s", e.message);
         }
 
-        // Write the full path, timestamp, and hash to the marker
+        // Write the full path, timestamp, and hash to the marker.
+        // If an HMAC key is set, append an HMAC-SHA256 tag as a 4th line
+        // to authenticate the marker content (prevents hash substitution).
         var now = new DateTime.now_local ();
-        var content = "%s\n%s\n%s\n".printf (screenshot_path, now.format_iso8601 (), file_hash);
+        var core_content = "%s\n%s\n%s".printf (screenshot_path, now.format_iso8601 (), file_hash);
+        string content;
+        if (hmac_key != "") {
+            var hmac = compute_hmac (core_content);
+            content = "%s\n%s\n".printf (core_content, hmac);
+        } else {
+            content = "%s\n".printf (core_content);
+        }
         marker.replace_contents (
             content.data,
             null,
@@ -177,6 +208,18 @@ public class Vigil.Services.StorageService : Object {
             }
 
             var stored_hash = lines[2].strip ();
+
+            // Verify HMAC if key is set and marker has a 4th line
+            if (hmac_key != "" && lines.length >= 4 && lines[3].strip () != "") {
+                var core_content = "%s\n%s\n%s".printf (lines[0], lines[1], stored_hash);
+                var expected_hmac = compute_hmac (core_content);
+                var stored_hmac = lines[3].strip ();
+                if (expected_hmac != stored_hmac) {
+                    debug ("Marker HMAC mismatch for %s (marker was tampered)", screenshot_path);
+                    return false;
+                }
+            }
+
             var current_hash = compute_sha256_hex (file_data);
 
             return current_hash == stored_hash;
@@ -357,6 +400,16 @@ public class Vigil.Services.StorageService : Object {
             _screenshot_file_count -= deleted;
         }
         return deleted;
+    }
+    /**
+     * Compute HMAC-SHA256 of the given data using the stored HMAC key.
+     *
+     * Returns a hex-encoded HMAC digest.
+     */
+    private string compute_hmac (string data) {
+        var hmac = new Hmac (ChecksumType.SHA256, hmac_key.data);
+        hmac.update (data.data);
+        return hmac.get_string ();
     }
 }
 

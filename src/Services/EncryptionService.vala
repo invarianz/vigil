@@ -864,6 +864,71 @@ public class Vigil.Services.EncryptionService : Object {
     }
 
     /**
+     * Save the pickle key to a secure file in the crypto directory.
+     *
+     * The pickle key is the master secret for E2EE state at rest. Storing it
+     * in a dedicated file with 0600 permissions is more secure than the
+     * GSettings/dconf database, which can be read by any process running
+     * as the same user via `dconf read` or `gsettings get`.
+     */
+    public static void save_pickle_key_to_file (string pickle_key) {
+        var dir = Path.build_filename (
+            Environment.get_user_data_dir (),
+            "io.github.invarianz.vigil",
+            "crypto"
+        );
+        DirUtils.create_with_parents (dir, 0700);
+        FileUtils.chmod (dir, 0700);
+
+        var path = Path.build_filename (dir, "pickle_key");
+        try {
+            FileUtils.set_contents (path, pickle_key);
+            FileUtils.chmod (path, 0600);
+        } catch (Error e) {
+            warning ("Failed to save pickle key to file: %s", e.message);
+        }
+    }
+
+    /**
+     * Load the pickle key from the secure file, or return null.
+     */
+    public static string? load_pickle_key_from_file () {
+        var path = Path.build_filename (
+            Environment.get_user_data_dir (),
+            "io.github.invarianz.vigil",
+            "crypto",
+            "pickle_key"
+        );
+
+        if (!FileUtils.test (path, FileTest.EXISTS)) {
+            return null;
+        }
+
+        try {
+            string contents;
+            FileUtils.get_contents (path, out contents);
+            var stripped = contents.strip ();
+            return stripped != "" ? stripped : null;
+        } catch (Error e) {
+            warning ("Failed to read pickle key from file: %s", e.message);
+            return null;
+        }
+    }
+
+    /**
+     * Derive an HMAC key from the pickle key for marker file integrity.
+     *
+     * Uses SHA-256(prefix + pickle_key) to derive a purpose-specific key,
+     * so the raw pickle key is never passed to StorageService directly.
+     */
+    public static string derive_hmac_key (string pickle_key) {
+        return Checksum.compute_for_string (
+            ChecksumType.SHA256,
+            "vigil-marker-hmac:" + pickle_key
+        );
+    }
+
+    /**
      * Generate cryptographic random bytes using a cached /dev/urandom fd.
      *
      * Aborts on failure -- falling back to a non-CSPRNG would silently

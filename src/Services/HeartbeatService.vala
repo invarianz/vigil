@@ -24,6 +24,21 @@
  * Network failure:
  *   Consecutive send failures are tracked. On recovery, the heartbeat
  *   reports how many were missed so the partner knows there was a gap.
+ *
+ * Sequence numbering:
+ *   Each heartbeat carries a monotonically increasing sequence number.
+ *   The partner can detect gaps (suppressed heartbeats) or replays
+ *   (duplicated numbers) for defense-in-depth.
+ *
+ * Alert persistence:
+ *   Unsent tamper alerts are persisted to disk so they survive daemon
+ *   restarts and network outages. On startup, persisted alerts are
+ *   re-queued for delivery in the next heartbeat.
+ *
+ * Config hash signing:
+ *   When an EncryptionService is available, the config hash included in
+ *   heartbeats is signed with the Ed25519 device key. The partner can
+ *   verify the signature against the published device key.
  */
 public class Vigil.Services.HeartbeatService : Object {
 
@@ -57,6 +72,15 @@ public class Vigil.Services.HeartbeatService : Object {
     /** Number of consecutive heartbeat send failures. */
     public int consecutive_failures { get; private set; default = 0; }
 
+    /** Optional EncryptionService for signing config hashes. */
+    public Vigil.Services.EncryptionService? encryption { get; set; default = null; }
+
+    /** Data directory for persisting unsent alerts. */
+    public string data_dir { get; set; default = ""; }
+
+    /** Monotonically increasing heartbeat sequence number. */
+    public int64 sequence_number { get; private set; default = 0; }
+
     /** List of tamper events since last heartbeat. */
     private GenericArray<string> _tamper_events;
 
@@ -83,13 +107,16 @@ public class Vigil.Services.HeartbeatService : Object {
 
     /**
      * Add a tamper event to be reported in the next heartbeat.
+     * Also persists to disk so events survive daemon restarts.
      */
     public void report_tamper_event (string event_description) {
         _tamper_events.add (event_description);
+        persist_unsent_alerts ();
     }
 
     /**
      * Start the heartbeat loop.
+     * Loads any persisted unsent alerts from a previous run.
      */
     public void start () {
         if (is_running) {
@@ -99,6 +126,9 @@ public class Vigil.Services.HeartbeatService : Object {
         is_running = true;
         start_time = new DateTime.now_local ();
         _last_heartbeat_monotonic = GLib.get_monotonic_time ();
+
+        // Load persisted alerts from a previous run
+        load_persisted_alerts ();
 
         // Send first heartbeat immediately
         send_heartbeat.begin ();
@@ -140,8 +170,8 @@ public class Vigil.Services.HeartbeatService : Object {
 
         var message = (
             "STATUS: Vigil going offline (clean shutdown, this is normal)" +
-            " | uptime was: %lldh %lldm | pending: %d"
-        ).printf (hours, minutes, pending_upload_count);
+            " | uptime was: %lldh %lldm | pending: %d | seq: %lld"
+        ).printf (hours, minutes, pending_upload_count, sequence_number);
 
         yield _matrix_svc.send_text_message (message);
     }
@@ -158,7 +188,8 @@ public class Vigil.Services.HeartbeatService : Object {
      * Build a human-readable heartbeat message for the Matrix room.
      *
      * Includes gap detection (sleep/wake), recovery info (consecutive
-     * failures), and tamper events.
+     * failures), tamper events, sequence number, and optional config
+     * hash signature.
      */
     public string build_heartbeat_message () {
         var uptime = get_uptime_seconds ();
@@ -166,8 +197,8 @@ public class Vigil.Services.HeartbeatService : Object {
         var minutes = (uptime % 3600) / 60;
 
         var sb = new StringBuilder ();
-        sb.append ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d".printf (
-            hours, minutes, screenshots_since_last, pending_upload_count
+        sb.append ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d | seq: %lld".printf (
+            hours, minutes, screenshots_since_last, pending_upload_count, sequence_number
         ));
 
         // Detect gap (sleep/wake or network outage recovery)
@@ -196,9 +227,32 @@ public class Vigil.Services.HeartbeatService : Object {
         var deadline = new DateTime.now_local ().add_seconds (interval_seconds * 2);
         sb.append (" | next check-in by: %s".printf (deadline.format ("%H:%M")));
 
+        // Include config hash with optional Ed25519 signature
+        if (config_hash != "") {
+            sb.append ("\nconfig: %s".printf (config_hash));
+            if (encryption != null && encryption.is_ready) {
+                var signature = encryption.sign_string (config_hash);
+                if (signature != "") {
+                    sb.append (" | sig: %s".printf (signature));
+                }
+            }
+        }
+
+        // Cap tamper events to last 50 and total message to ~60KB
+        // to prevent unbounded growth from event accumulation.
         if (_tamper_events.length > 0) {
-            sb.append ("\nTamper events:");
-            for (int i = 0; i < _tamper_events.length; i++) {
+            int start = int.max (0, (int) _tamper_events.length - 50);
+            if (start > 0) {
+                sb.append ("\nTamper events (%d total, showing last 50):".printf (
+                    (int) _tamper_events.length));
+            } else {
+                sb.append ("\nTamper events:");
+            }
+            for (int i = start; i < _tamper_events.length; i++) {
+                if (sb.len > 60000) {
+                    sb.append ("\n  ... (truncated)");
+                    break;
+                }
                 sb.append ("\n  - %s".printf (_tamper_events[i]));
             }
         }
@@ -215,6 +269,7 @@ public class Vigil.Services.HeartbeatService : Object {
             return false;
         }
 
+        sequence_number++;
         var message = build_heartbeat_message ();
         var sent = yield _matrix_svc.send_text_message (message);
 
@@ -224,11 +279,82 @@ public class Vigil.Services.HeartbeatService : Object {
             _tamper_events.remove_range (0, _tamper_events.length);
             _last_heartbeat_monotonic = GLib.get_monotonic_time ();
             heartbeat_sent (new DateTime.now_local ());
+            // Clear persisted alerts since they were successfully sent
+            clear_persisted_alerts ();
             return true;
         } else {
             consecutive_failures++;
             heartbeat_failed ("Failed to send heartbeat via Matrix");
             return false;
+        }
+    }
+
+    /**
+     * Persist unsent tamper alerts to disk so they survive daemon restarts.
+     */
+    private void persist_unsent_alerts () {
+        if (data_dir == "" || _tamper_events.length == 0) {
+            return;
+        }
+
+        var path = Path.build_filename (data_dir, "unsent_alerts.txt");
+        var sb = new StringBuilder ();
+        for (int i = 0; i < _tamper_events.length; i++) {
+            sb.append (_tamper_events[i]);
+            sb.append_c ('\n');
+        }
+
+        try {
+            FileUtils.set_contents (path, sb.str);
+            FileUtils.chmod (path, 0600);
+        } catch (Error e) {
+            debug ("Failed to persist unsent alerts: %s", e.message);
+        }
+    }
+
+    /**
+     * Load persisted unsent alerts from a previous daemon run.
+     */
+    private void load_persisted_alerts () {
+        if (data_dir == "") {
+            return;
+        }
+
+        var path = Path.build_filename (data_dir, "unsent_alerts.txt");
+        if (!FileUtils.test (path, FileTest.EXISTS)) {
+            return;
+        }
+
+        try {
+            string contents;
+            FileUtils.get_contents (path, out contents);
+            var lines = contents.split ("\n");
+            foreach (var line in lines) {
+                var stripped = line.strip ();
+                if (stripped != "") {
+                    _tamper_events.add (stripped);
+                }
+            }
+            if (_tamper_events.length > 0) {
+                debug ("Loaded %d persisted tamper alerts from previous run",
+                    (int) _tamper_events.length);
+            }
+        } catch (Error e) {
+            debug ("Failed to load persisted alerts: %s", e.message);
+        }
+    }
+
+    /**
+     * Clear persisted alerts after successful heartbeat delivery.
+     */
+    private void clear_persisted_alerts () {
+        if (data_dir == "") {
+            return;
+        }
+
+        var path = Path.build_filename (data_dir, "unsent_alerts.txt");
+        if (FileUtils.test (path, FileTest.EXISTS)) {
+            FileUtils.remove (path);
         }
     }
 

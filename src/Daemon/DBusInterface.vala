@@ -242,6 +242,7 @@ public class Vigil.Daemon.DBusServer : Object {
 
         _screenshot_svc.screenshot_taken.connect ((path) => {
             _heartbeat_svc.screenshots_since_last++;
+            _tamper_svc.report_capture_success ();
             screenshot_captured (path);
             status_changed ();
         });
@@ -293,6 +294,25 @@ public class Vigil.Daemon.DBusServer : Object {
         _matrix_svc.homeserver_url = _settings.get_string ("matrix-homeserver-url");
         _matrix_svc.access_token = _settings.get_string ("matrix-access-token");
         _matrix_svc.room_id = _settings.get_string ("matrix-room-id");
+
+        // Wire up tamper detection: orphan check dirs & capture liveness threshold
+        _tamper_svc.screenshots_dir = _storage_svc.screenshots_dir;
+        _tamper_svc.pending_dir = _storage_svc.pending_dir;
+        _tamper_svc.max_capture_interval_seconds = _settings.get_int ("max-interval-seconds");
+        _tamper_svc.check_interval_seconds = _settings.get_int ("tamper-check-interval-seconds");
+
+        // Wire up heartbeat data dir for alert persistence
+        var data_dir = Path.build_filename (
+            Environment.get_user_data_dir (),
+            "io.github.invarianz.vigil"
+        );
+        _heartbeat_svc.data_dir = data_dir;
+
+        // Derive HMAC key from pickle key for marker integrity
+        var pickle_key = _settings.get_string ("e2ee-pickle-key");
+        if (pickle_key != "") {
+            _storage_svc.hmac_key = Vigil.Services.EncryptionService.derive_hmac_key (pickle_key);
+        }
     }
 
     private void bind_settings () {
@@ -347,6 +367,8 @@ public class Vigil.Daemon.DBusServer : Object {
 
         if (enc.initialize (pickle_key)) {
             enc.restore_group_session ();
+            // Wire up encryption for config hash signing in heartbeats
+            _heartbeat_svc.encryption = enc;
             debug ("E2EE (re)initialized from settings (session: %s)", enc.megolm_session_id);
         } else {
             warning ("E2EE initialization failed");

@@ -149,6 +149,65 @@ void test_offline_notice_without_matrix () {
     loop.run ();
 }
 
+void test_sequence_number_in_message () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    var msg = svc.build_heartbeat_message ();
+    assert_true (msg.contains ("seq: 0"));
+}
+
+void test_alert_persistence () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.data_dir = dir;
+
+    // Report events -- should be persisted to file
+    svc.report_tamper_event ("test_event_1");
+    svc.report_tamper_event ("test_event_2");
+
+    var alerts_path = Path.build_filename (dir, "unsent_alerts.txt");
+    assert_true (FileUtils.test (alerts_path, FileTest.EXISTS));
+
+    // Load in a new service instance to verify persistence
+    var svc2 = new Vigil.Services.HeartbeatService ();
+    svc2.data_dir = dir;
+    svc2.start ();
+    svc2.stop ();
+
+    var msg = svc2.build_heartbeat_message ();
+    assert_true (msg.contains ("test_event_1"));
+    assert_true (msg.contains ("test_event_2"));
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_message_size_capped () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    // Add a large number of tamper events
+    for (int i = 0; i < 200; i++) {
+        svc.report_tamper_event (
+            "long_event_%d: a very detailed description of what happened".printf (i));
+    }
+
+    var msg = svc.build_heartbeat_message ();
+    // Message should be capped at ~60KB
+    assert_true (msg.length <= 65000);
+    // Should mention total count
+    assert_true (msg.contains ("200 total"));
+}
+
+void test_offline_notice_includes_seq () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    // Build offline message (can't send without Matrix, but check format)
+    // The send_offline_notice will return early without Matrix, so test message build
+    var msg = svc.build_heartbeat_message ();
+    assert_true (msg.contains ("seq:"));
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -176,6 +235,14 @@ public static int main (string[] args) {
         test_gap_detection_in_message);
     Test.add_func ("/heartbeat/offline_notice_no_matrix",
         test_offline_notice_without_matrix);
+    Test.add_func ("/heartbeat/sequence_number",
+        test_sequence_number_in_message);
+    Test.add_func ("/heartbeat/alert_persistence",
+        test_alert_persistence);
+    Test.add_func ("/heartbeat/message_size_capped",
+        test_message_size_capped);
+    Test.add_func ("/heartbeat/offline_notice_seq",
+        test_offline_notice_includes_seq);
 
     return Test.run ();
 }

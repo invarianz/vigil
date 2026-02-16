@@ -462,6 +462,108 @@ void test_e2ee_init_failure_event () {
     assert_true (event_type == "e2ee_init_failed");
 }
 
+void test_capture_liveness_no_alarm_before_monitoring () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.max_capture_interval_seconds = 1;
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    // Should not fire before report_capture_success() is ever called
+    svc.check_capture_liveness ();
+    assert_true (event_type == null);
+}
+
+void test_capture_liveness_no_alarm_when_recent () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.max_capture_interval_seconds = 3600;
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.report_capture_success ();
+    svc.check_capture_liveness ();
+    assert_true (event_type == null);
+}
+
+void test_orphan_detection_no_dirs () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    // No dirs configured -- should not fire
+    svc.check_orphan_screenshots ();
+    assert_true (event_type == null);
+}
+
+void test_orphan_detection_with_many_orphans () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+    var screenshots = Path.build_filename (dir, "screenshots");
+    var pending = Path.build_filename (dir, "pending");
+    DirUtils.create_with_parents (screenshots, 0755);
+    DirUtils.create_with_parents (pending, 0755);
+
+    // Create 10 orphan screenshots (no markers)
+    for (int i = 0; i < 10; i++) {
+        var path = Path.build_filename (screenshots, "orphan_%d.png".printf (i));
+        try { FileUtils.set_contents (path, "fake"); } catch (Error e) {}
+    }
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.screenshots_dir = screenshots;
+    svc.pending_dir = pending;
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_orphan_screenshots ();
+    assert_true (event_type == "orphan_screenshots");
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_orphan_detection_no_alarm_when_few () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+    var screenshots = Path.build_filename (dir, "screenshots");
+    var pending = Path.build_filename (dir, "pending");
+    DirUtils.create_with_parents (screenshots, 0755);
+    DirUtils.create_with_parents (pending, 0755);
+
+    // Only 3 orphans -- below threshold of 5
+    for (int i = 0; i < 3; i++) {
+        var path = Path.build_filename (screenshots, "orphan_%d.png".printf (i));
+        try { FileUtils.set_contents (path, "fake"); } catch (Error e) {}
+    }
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.screenshots_dir = screenshots;
+    svc.pending_dir = pending;
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_orphan_screenshots ();
+    assert_true (event_type == null);
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_stop_cleans_up_urandom () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
+
+    svc.start ();
+    assert_true (svc.is_running);
+    svc.stop ();
+    assert_false (svc.is_running);
+    // Ensure double-stop is safe
+    svc.stop ();
+    assert_false (svc.is_running);
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -486,6 +588,16 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/partner_id_cleared", test_partner_id_cleared);
     Test.add_func ("/tamper/timers_within_limits", test_timers_within_limits_no_tamper);
     Test.add_func ("/tamper/e2ee_init_failure", test_e2ee_init_failure_event);
+    Test.add_func ("/tamper/capture_liveness_no_alarm_before_monitoring",
+        test_capture_liveness_no_alarm_before_monitoring);
+    Test.add_func ("/tamper/capture_liveness_no_alarm_when_recent",
+        test_capture_liveness_no_alarm_when_recent);
+    Test.add_func ("/tamper/orphan_detection_no_dirs", test_orphan_detection_no_dirs);
+    Test.add_func ("/tamper/orphan_detection_many_orphans",
+        test_orphan_detection_with_many_orphans);
+    Test.add_func ("/tamper/orphan_detection_few_no_alarm",
+        test_orphan_detection_no_alarm_when_few);
+    Test.add_func ("/tamper/stop_cleans_up_urandom", test_stop_cleans_up_urandom);
 
     return Test.run ();
 }

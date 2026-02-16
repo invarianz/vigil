@@ -256,6 +256,148 @@ void test_storage_directory_permissions () {
     teardown_test_dir ();
 }
 
+void test_storage_hmac_marker_integrity () {
+    setup_test_dir ();
+
+    var service = create_test_service ();
+    service.hmac_key = "test-hmac-key-1234";
+    try {
+        service.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    var screenshot_path = Path.build_filename (service.screenshots_dir, "hmac_test.png");
+    var fake_data = "fake png content for hmac test";
+    try {
+        FileUtils.set_contents (screenshot_path, fake_data);
+        service.mark_pending (screenshot_path);
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    // Read the marker and verify it has 4 lines (path, timestamp, hash, hmac)
+    var marker_path = Path.build_filename (service.pending_dir, "hmac_test.png.pending");
+    try {
+        string contents;
+        FileUtils.get_contents (marker_path, out contents);
+        var lines = contents.split ("\n");
+        // Should have at least 4 non-empty lines: path, timestamp, hash, hmac
+        int non_empty = 0;
+        foreach (var line in lines) {
+            if (line.strip () != "") non_empty++;
+        }
+        assert_true (non_empty >= 4);
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    // Verify integrity passes with correct data
+    uint8[] file_data;
+    try {
+        FileUtils.get_data (screenshot_path, out file_data);
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+    assert_true (service.verify_screenshot_integrity_from_data (screenshot_path, file_data));
+
+    teardown_test_dir ();
+}
+
+void test_storage_hmac_detects_marker_tamper () {
+    setup_test_dir ();
+
+    var service = create_test_service ();
+    service.hmac_key = "test-hmac-key-5678";
+    try {
+        service.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    var screenshot_path = Path.build_filename (service.screenshots_dir, "tamper_test.png");
+    try {
+        FileUtils.set_contents (screenshot_path, "original content");
+        service.mark_pending (screenshot_path);
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    // Now tamper with the marker: change the stored hash
+    var marker_path = Path.build_filename (service.pending_dir, "tamper_test.png.pending");
+    try {
+        string contents;
+        FileUtils.get_contents (marker_path, out contents);
+        var lines = contents.split ("\n");
+        // Replace hash line with a fake hash
+        lines[2] = "0000000000000000000000000000000000000000000000000000000000000000";
+        FileUtils.set_contents (marker_path, string.joinv ("\n", lines));
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    // Verification should fail because HMAC won't match
+    uint8[] file_data;
+    try {
+        FileUtils.get_data (screenshot_path, out file_data);
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+    assert_false (service.verify_screenshot_integrity_from_data (screenshot_path, file_data));
+
+    teardown_test_dir ();
+}
+
+void test_storage_path_validation_rejects_outside () {
+    setup_test_dir ();
+
+    var service = create_test_service ();
+    try {
+        service.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    // Try to mark a file outside the screenshots directory
+    bool threw = false;
+    try {
+        service.mark_pending ("/tmp/evil_screenshot.png");
+    } catch (Error e) {
+        threw = true;
+    }
+    assert_true (threw);
+
+    teardown_test_dir ();
+}
+
+void test_storage_pickle_key_file_roundtrip () {
+    // Test save/load pickle key static methods
+    var test_key = "test-pickle-key-12345";
+    Vigil.Services.EncryptionService.save_pickle_key_to_file (test_key);
+
+    var loaded = Vigil.Services.EncryptionService.load_pickle_key_from_file ();
+    assert_true (loaded == test_key);
+
+    // Clean up
+    var path = Path.build_filename (
+        Environment.get_user_data_dir (),
+        "io.github.invarianz.vigil", "crypto", "pickle_key");
+    FileUtils.remove (path);
+}
+
+void test_storage_hmac_key_derivation () {
+    var key1 = Vigil.Services.EncryptionService.derive_hmac_key ("password1");
+    var key2 = Vigil.Services.EncryptionService.derive_hmac_key ("password2");
+    var key3 = Vigil.Services.EncryptionService.derive_hmac_key ("password1");
+
+    // Different passwords produce different keys
+    assert_true (key1 != key2);
+    // Same password produces same key
+    assert_true (key1 == key3);
+    // Key is a SHA-256 hex string (64 chars)
+    assert_true (key1.length == 64);
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -269,6 +411,11 @@ public static int main (string[] args) {
     Test.add_func ("/storage/cleanup_max", test_storage_cleanup_respects_max);
     Test.add_func ("/storage/cleanup_preserves_pending", test_storage_cleanup_preserves_pending);
     Test.add_func ("/storage/directory_permissions", test_storage_directory_permissions);
+    Test.add_func ("/storage/hmac_marker_integrity", test_storage_hmac_marker_integrity);
+    Test.add_func ("/storage/hmac_detects_marker_tamper", test_storage_hmac_detects_marker_tamper);
+    Test.add_func ("/storage/path_validation_rejects_outside", test_storage_path_validation_rejects_outside);
+    Test.add_func ("/storage/pickle_key_roundtrip", test_storage_pickle_key_file_roundtrip);
+    Test.add_func ("/storage/hmac_key_derivation", test_storage_hmac_key_derivation);
 
     return Test.run ();
 }
