@@ -18,84 +18,131 @@
 
 ---
 
-Vigil takes screenshots of your screen at random intervals and sends them to your accountability partner via Matrix with native end-to-end encryption. It works on both X11 and Wayland, including elementary OS 7 and 8.
+Vigil takes screenshots of your screen at random intervals and sends them to an accountability partner of your choice. Everything is end-to-end encrypted -- not even the server can see your images.
+
+You install Vigil, your partner installs [Element](https://element.io/) (a free chat app), and you're connected. Vigil runs quietly in the background and alerts your partner if someone tries to tamper with it.
+
+## How it works
+
+1. Vigil captures your screen at unpredictable intervals (every 30 seconds to 2 minutes)
+2. Each screenshot is encrypted before it ever leaves your device
+3. The encrypted image is sent to your partner through a private [Matrix](https://matrix.org/) chat room
+4. Your partner views the screenshots in Element on their phone or computer
+5. If Vigil is stopped, uninstalled, or tampered with, your partner receives an alert
+
+Your partner doesn't need any technical knowledge. They just watch for screenshots, and if the messages stop or a **TAMPER ALERT** appears, they know something is wrong.
 
 ## Features
 
-- Random-interval screenshots (30s--2min by default) that cannot be predicted
-- Dual backend: XDG Desktop Portal (Wayland) and Gala D-Bus (X11)
-- **Native E2EE**: built-in Olm/Megolm encryption via libolm -- no external proxy needed
-- **Encrypted attachments**: screenshots are AES-256-CTR encrypted before upload per the Matrix spec -- the homeserver never sees plaintext images
-- **One-button setup**: enter homeserver, username, password, partner ID, and E2EE password -- one click does login, room creation, key exchange, and encryption setup
-- **Matrix transport**: sends screenshots to a private encrypted chat room -- no third-party server sees your data
-- Queues screenshots for delivery when offline, retries on startup
-- Tamper detection: alerts your partner if the daemon is stopped, autostart is removed, settings are changed, E2EE is disabled, or the binary is modified
-- Heartbeat dead man's switch with explicit "next check-in by" deadline -- partner sees a concrete time, no technical knowledge needed
-- Systemd user service with watchdog and restart-on-kill
-- Follows elementary OS Human Interface Guidelines
-- Built with GTK 4 and Granite 7
+- **Unpredictable timing** -- screenshots are taken at random intervals so they can't be anticipated
+- **End-to-end encrypted** -- screenshots are encrypted on your device before upload; the server never sees them
+- **One-click setup** -- enter your account details, click Setup, and Vigil handles login, room creation, and encryption automatically
+- **Tamper detection** -- alerts your partner if the daemon is stopped, autostart is removed, settings are changed, or the binary is modified
+- **Dead man's switch** -- heartbeat messages include a "next check-in by" deadline so your partner knows exactly when to expect the next update
+- **Offline resilience** -- queues screenshots for delivery when offline, retries on reconnect
+- **Settings lock** -- after setup, settings are locked behind a code that only your partner knows
+- **Works on X11 and Wayland** -- dual screenshot backend for elementary OS 7 and 8
+- **Runs as a system service** -- keeps running even when the GUI is closed, restarts automatically if killed
 
-## Architecture
+## Getting started
 
-vigil runs as two processes:
+### What you'll need
 
-- **vigil-daemon**: headless systemd service that takes screenshots, encrypts them, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
-- **vigil GUI**: thin GTK4 app that connects to the daemon over D-Bus. Shows status and settings. Handles one-time setup (login, room creation, E2EE initialization).
+- **You**: elementary OS 7 or 8 with Vigil installed
+- **Your partner**: any device with [Element](https://element.io/) installed (phone or computer)
+- **Matrix accounts** for both of you -- free accounts at [matrix.org](https://app.element.io) work fine, or you can self-host for maximum privacy
 
-### Encryption scheme
+### Step 1: Set up Vigil
 
-vigil implements the full Matrix E2EE stack natively, with no dependency on external encryption proxies like pantalaimon.
+Open Vigil and go to Settings. Fill in:
 
-#### Key hierarchy
+1. **Homeserver** -- your Matrix server (e.g. `matrix.org`)
+2. **Username** -- your Matrix username
+3. **Password** -- your Matrix password
+4. **Partner Matrix ID** -- your partner's Matrix ID (e.g. `@partner:matrix.org`)
+5. **E2EE Password** -- a password to protect your encryption keys on disk
+
+Click **Setup**. Vigil will log in, create a private encrypted room, invite your partner, and set up encryption -- all in one step.
+
+### Step 2: Your partner accepts the invite
+
+Your partner opens Element and accepts the room invite from Vigil. From now on, they'll receive:
+
+- **Screenshots** -- batches of images delivered every 10 minutes
+- **Heartbeats** -- status messages every 15 minutes with a "next check-in by" deadline
+- **Tamper alerts** -- bold warnings if someone tries to interfere with Vigil
+
+Your partner only needs to watch for three things:
+
+| What they see | What it means |
+|---|---|
+| Regular messages and screenshots | Everything is working normally |
+| **TAMPER ALERT** | Something suspicious happened -- investigate |
+| "Next check-in by" deadline passes with no message | Something is wrong (device off, Vigil removed, etc.) |
+
+### Step 3: Settings are locked automatically
+
+After setup, Vigil locks all settings and sends a 6-character unlock code to your partner:
+
+> Settings are now locked. Unlock code: A7KM3P -- Keep this code. The user will need it from you to change any settings.
+
+To change settings later, you'll need to ask your partner for the code. If someone tries to bypass the lock through system tools, a tamper alert fires immediately.
+
+### Step 4: Enable monitoring
+
+Switch to the Status tab and enable monitoring. Vigil starts capturing in the background and keeps running as a system service, even after you close the window.
+
+## Security and encryption
+
+Vigil implements the Matrix end-to-end encryption protocol natively using libolm. No external encryption proxy is needed.
+
+- **Screenshots** are encrypted with a fresh AES-256 key before upload -- the server only stores opaque encrypted data
+- **Messages** are encrypted with Megolm (the same protocol used by Element and other Matrix clients)
+- **Key exchange** happens automatically via Olm during setup
+- **No unencrypted fallback** -- if encryption fails, the message is dropped rather than sent in plaintext
+- **All randomness** comes from the system CSPRNG (`/dev/urandom`); if it becomes unavailable, Vigil aborts rather than using weak randomness
+- **Encryption keys** are stored on disk encrypted with your E2EE password, with restrictive file permissions
+
+<details>
+<summary>Encryption details (click to expand)</summary>
+
+### Architecture
+
+Vigil runs as two processes:
+
+- **vigil-daemon** -- a background system service that captures screenshots, encrypts them, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
+- **vigil** -- a GTK 4 app for status and settings. Connects to the daemon over D-Bus. Handles one-time setup.
+
+### What happens when a screenshot is taken
+
+1. The screen is captured via XDG Desktop Portal (Wayland) or Gala D-Bus (X11)
+2. The PNG is encrypted with a fresh random AES-256-CTR key and IV, then a SHA-256 hash of the ciphertext is computed for integrity verification
+3. The encrypted blob is uploaded to the Matrix content repository
+4. The event JSON (containing the download URL, decryption key, IV, and hash) is encrypted with the room's Megolm session
+5. The encrypted event is sent to the room -- only your partner's devices can decrypt it
+
+### Key hierarchy
 
 ```
 E2EE Password (user-provided)
-  └─ Pickle key: encrypts all libolm state at rest on disk
+  └─ Pickle key: encrypts all cryptographic state at rest
 
 OlmAccount (per-device, long-lived)
   ├─ Ed25519 identity key: signs device keys and messages
-  ├─ Curve25519 identity key: used for Olm key agreement
-  └─ One-time keys (Curve25519): consumed during Olm session setup
+  ├─ Curve25519 identity key: used for key agreement
+  └─ One-time keys: consumed during session setup
 
-Megolm outbound group session (per-room, long-lived)
-  └─ Session key: shared with partner devices via Olm-encrypted to-device messages
-      └─ Ratchets forward after each message (forward secrecy within the session)
+Megolm outbound group session (per-room)
+  └─ Session key: shared with partner via Olm-encrypted messages
+      └─ Ratchets forward after each message
 
-AES-256-CTR key (per-attachment, ephemeral)
-  └─ Fresh random 256-bit key + 128-bit IV generated for each screenshot
+AES-256-CTR key (per-screenshot, ephemeral)
+  └─ Fresh random 256-bit key + 128-bit IV for each file
 ```
 
-#### What happens when a screenshot is taken
+</details>
 
-1. **Screenshot capture**: vigil captures the screen via XDG Desktop Portal (Wayland) or Gala D-Bus (X11)
-2. **File encryption (AES-256-CTR)**: the PNG file is encrypted with a fresh random 256-bit AES key and 128-bit IV using OpenSSL's EVP API. A SHA-256 hash of the ciphertext is computed (also via OpenSSL) for integrity verification. The homeserver only ever receives opaque encrypted bytes.
-3. **Upload**: the encrypted blob is uploaded to the Matrix content repository as `application/octet-stream`
-4. **Event encryption (Megolm)**: the event JSON (containing the `mxc://` URL, JWK decryption key, IV, and SHA-256 hash) is encrypted with the room's Megolm outbound group session
-5. **Send**: the `m.room.encrypted` event is sent to the room. Only devices that received the Megolm session key can decrypt the event, and only then can they decrypt the attachment.
-
-#### E2EE setup flow (one-time)
-
-1. GUI creates an OlmAccount and uploads Ed25519 + Curve25519 device keys to the homeserver
-2. 50 signed one-time keys (Curve25519) are uploaded for Olm session bootstrapping
-3. A Megolm outbound group session is created for room encryption
-4. Partner's device keys are queried via `/keys/query` and one-time keys claimed via `/keys/claim`
-5. An Olm session is established with each partner device using Curve25519 key agreement
-6. The Megolm room key (`m.room_key`) is Olm-encrypted per-device and sent via `/sendToDevice`
-7. All crypto state is pickled (encrypted with the E2EE password) and persisted to `~/.local/share/io.github.invarianz.vigil/crypto/`
-8. The daemon restores the pickled state on startup and continues encrypting
-
-#### Security hardening
-
-- **No unencrypted fallback**: if E2EE is configured but encryption fails, messages are dropped rather than sent in plaintext
-- **CSPRNG only**: all random material comes from `/dev/urandom` via a cached file descriptor. If the CSPRNG becomes unavailable, the daemon aborts rather than falling back to a weak PRNG
-- **Restrictive file permissions**: the crypto directory is `0700`, pickle files are `0600`, and screenshot directories are `0700`
-- **Hardware-accelerated crypto**: AES-256-CTR encryption and SHA-256 hashing use OpenSSL's EVP API, which automatically uses hardware acceleration (AES-NI, SHA-NI) when available
-
-## How Wayland screenshots work
-
-On Wayland, vigil uses the XDG Desktop Portal Screenshot interface. The first time it takes a screenshot, the system shows a one-time permission dialog. Once the user grants access, all subsequent screenshots are taken silently. If the user revokes permission, vigil detects the failure and reports it to the accountability partner.
-
-## Building
+## Building from source
 
 ```bash
 # Install dependencies (elementary OS 8 / Ubuntu 24.04)
@@ -110,113 +157,12 @@ meson compile -C build
 # Run tests
 meson test -C build
 
-# Run unit tests only
-meson test -C build --suite unit
-
 # Install
 sudo meson install -C build
 
 # Enable the daemon
 systemctl --user enable --now vigil-daemon.service
 ```
-
-## Usage: setting up with your accountability partner
-
-### Step 1: Create Matrix accounts
-
-Both you and your partner need a Matrix account. You can use any Matrix homeserver:
-
-- **matrix.org** -- free, public registration at https://app.element.io
-- **Self-hosted** -- run your own Conduit or Synapse server for maximum privacy
-
-Your partner installs **Element** (free) on their phone (Android/iOS) or desktop.
-
-### Step 2: Configure vigil
-
-Open the vigil GUI and go to Settings. Fill in:
-
-1. **Homeserver** -- just the server name (e.g. `matrix.org`). vigil auto-discovers the full URL via `.well-known`.
-2. **Username** -- your Matrix username (without the `@` prefix)
-3. **Password** -- your Matrix password
-4. **Partner Matrix ID** -- your accountability partner's full Matrix ID (e.g. `@partner:matrix.org`)
-5. **E2EE Password** -- a password that encrypts your encryption keys at rest
-
-Click **Setup**. vigil will:
-- Discover and connect to your homeserver
-- Log in with your credentials
-- Create a private encrypted room and invite your partner
-- Initialize end-to-end encryption
-- Upload device keys and share room keys with your partner's devices
-
-Once setup completes, enable monitoring from the Status tab.
-
-### Step 3: Partner accepts the invite
-
-Your partner opens Element and accepts the room invite. They will see:
-
-- **Screenshots**: batches of images sent every 10 minutes (captured every 30s--2min, delivered in batches to avoid flooding)
-- **Heartbeats**: periodic status messages every 15 minutes: `Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0 | next check-in by: 14:35`
-- **TAMPER ALERT**: bold, formatted alerts that stand out: **TAMPER ALERT [autostart_missing]** -- clearly different from routine messages
-- **STATUS messages**: informational notices like `STATUS: Vigil going offline (clean shutdown, this is normal)` or `resumed after 45m gap (device was asleep or offline, this is normal)`
-
-Your partner only needs to understand three things:
-1. **Regular messages** = everything is fine
-2. **"TAMPER ALERT"** (bold) = something suspicious happened, investigate
-3. **"next check-in by" deadline passes** with no new message = something is wrong (covers kill, uninstall, etc.)
-
-### Step 4: Settings are auto-locked
-
-After setup, vigil **automatically locks all settings** and sends a 6-character unlock code to your partner via Matrix:
-
-> Settings are now locked. Unlock code: A7KM3P -- Keep this code. The user will need it from you to change any settings.
-
-To change any settings later, the user must:
-1. Ask the partner for the unlock code
-2. Enter it in the GUI
-3. Make changes
-4. Click "Lock Settings" -- a **new** unlock code is generated and sent to the partner
-
-If someone tries to bypass the lock via command-line tools (`gsettings`, `dconf-editor`), a tamper alert fires immediately.
-
-### Step 5: Verify the setup
-
-Once everything is working, your accountability partner should verify:
-
-1. The daemon is running: `systemctl --user status vigil-daemon.service`
-2. Autostart is enabled: check that the daemon desktop entry exists in `/etc/xdg/autostart/`
-3. The systemd service has `RefuseManualStop=true` and `Restart=always`
-
-The daemon monitors its own integrity and alerts via Matrix if:
-- The autostart entry is deleted or modified
-- The systemd service is disabled
-- The daemon binary is replaced
-- Monitoring is disabled via GSettings
-- Matrix transport settings are cleared or partially removed
-- E2EE encryption keys are cleared
-- The settings lock is disabled or bypassed
-
-## Configuration
-
-All settings are stored via GSettings (`io.github.invarianz.vigil`):
-
-| Setting | Description | Default |
-|---|---|---|
-| `matrix-homeserver-url` | Matrix homeserver URL (auto-discovered) | (empty) |
-| `matrix-access-token` | Matrix access token (set during login) | (empty) |
-| `matrix-room-id` | Matrix room ID (auto-created) | (empty) |
-| `matrix-user-id` | Matrix user ID (set during login) | (empty) |
-| `partner-matrix-id` | Partner's Matrix user ID | (empty) |
-| `device-id` | Matrix device ID (set during login) | (empty) |
-| `e2ee-pickle-key` | E2EE password for encrypting crypto state | (empty) |
-| `settings-locked` | Whether settings are locked (partner holds unlock code) | false |
-| `min-interval-seconds` | Minimum time between screenshots | 30 (30 sec) |
-| `max-interval-seconds` | Maximum time between screenshots | 120 (2 min) |
-| `max-local-screenshots` | Screenshots to keep locally | 100 |
-| `monitoring-enabled` | Whether monitoring is active | false |
-| `autostart-enabled` | Start at login | false |
-| `heartbeat-interval-seconds` | Heartbeat ping interval | 900 (15 min) |
-| `upload-batch-interval-seconds` | How often to send screenshots to partner | 600 (10 min) |
-| `tamper-check-interval-seconds` | Tamper check interval | 120 (2 min) |
 
 ## License
 
