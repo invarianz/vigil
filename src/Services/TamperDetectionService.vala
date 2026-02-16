@@ -53,9 +53,6 @@ public class Vigil.Services.TamperDetectionService : Object {
     private GLib.Settings? _settings = null;
     private uint _timeout_source = 0;
 
-    /** Cached /dev/urandom stream for jitter CSPRNG. */
-    private DataInputStream? _urandom_stream = null;
-
     /**
      * Create a TamperDetectionService.
      *
@@ -104,11 +101,6 @@ public class Vigil.Services.TamperDetectionService : Object {
         if (_timeout_source != 0) {
             Source.remove (_timeout_source);
             _timeout_source = 0;
-        }
-
-        if (_urandom_stream != null) {
-            try { _urandom_stream.close (null); } catch (Error e) {}
-            _urandom_stream = null;
         }
 
         is_running = false;
@@ -241,7 +233,7 @@ public class Vigil.Services.TamperDetectionService : Object {
             _settings.get_int ("tamper-check-interval-seconds")
         );
 
-        return Checksum.compute_for_string (ChecksumType.SHA256, data);
+        return SecurityUtils.compute_sha256_hex_string (data);
     }
 
     /**
@@ -422,7 +414,7 @@ public class Vigil.Services.TamperDetectionService : Object {
         try {
             uint8[] contents;
             FileUtils.get_data (daemon_binary_path, out contents);
-            var actual_hash = Checksum.compute_for_data (ChecksumType.SHA256, contents);
+            var actual_hash = SecurityUtils.compute_sha256_hex (contents);
 
             if (actual_hash != expected_binary_hash) {
                 emit_tamper ("binary_modified",
@@ -510,24 +502,7 @@ public class Vigil.Services.TamperDetectionService : Object {
         }
 
         int range = max_val - min_val;
-        uint32 rand_val = 0;
-
-        try {
-            if (_urandom_stream == null) {
-                var file = File.new_for_path ("/dev/urandom");
-                _urandom_stream = new DataInputStream (file.read (null));
-            }
-            uint8[] buf = new uint8[4];
-            size_t bytes_read;
-            _urandom_stream.read_all (buf, out bytes_read, null);
-            rand_val = ((uint32) buf[0] << 24) |
-                       ((uint32) buf[1] << 16) |
-                       ((uint32) buf[2] << 8)  |
-                       (uint32) buf[3];
-        } catch (Error e) {
-            debug ("CSPRNG unavailable for jitter: %s", e.message);
-            return base_interval;
-        }
+        uint32 rand_val = SecurityUtils.csprng_uint32 ();
 
         return min_val + (int) (rand_val % (range + 1));
     }

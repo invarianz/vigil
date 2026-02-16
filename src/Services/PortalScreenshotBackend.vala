@@ -64,23 +64,42 @@ public class Vigil.Services.PortalScreenshotBackend : Object, Vigil.Services.ISc
         var source_file = File.new_for_uri (uri);
         var dest_file = File.new_for_path (destination_path);
 
+        // Verify source is a regular file (not a symlink) before copying
+        var source_info = yield source_file.query_info_async (
+            "standard::type",
+            FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+            Priority.DEFAULT, null);
+        if (source_info.get_file_type () != FileType.REGULAR) {
+            throw new IOError.FAILED (
+                "Portal screenshot source is not a regular file");
+        }
+
         // Ensure the destination directory exists
         var dest_dir = dest_file.get_parent ();
         if (dest_dir != null && !dest_dir.query_exists ()) {
             dest_dir.make_directory_with_parents (null);
         }
 
+        // TARGET_DEFAULT_PERMS ensures destination gets correct ownership
         yield source_file.copy_async (
             dest_file,
-            FileCopyFlags.OVERWRITE,
+            FileCopyFlags.OVERWRITE | FileCopyFlags.TARGET_DEFAULT_PERMS,
             Priority.DEFAULT,
             null,
             null
         );
 
-        // Clean up the temporary file created by the portal
+        // Clean up the temporary file created by the portal.
+        // Re-verify it's still a regular file before deleting to prevent
+        // symlink-based deletion attacks.
         try {
-            yield source_file.delete_async (Priority.DEFAULT, null);
+            var del_info = yield source_file.query_info_async (
+                "standard::type",
+                FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+                Priority.DEFAULT, null);
+            if (del_info.get_file_type () == FileType.REGULAR) {
+                yield source_file.delete_async (Priority.DEFAULT, null);
+            }
         } catch (Error e) {
             // Not critical if cleanup fails
             debug ("Could not delete portal temp file: %s", e.message);

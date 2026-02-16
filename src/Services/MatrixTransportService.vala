@@ -101,12 +101,30 @@ public class Vigil.Services.MatrixTransportService : Object {
     public async string? discover_homeserver (string server_name) {
         var name = server_name.strip ();
 
+        // Reject empty input
+        if (name == "") {
+            return null;
+        }
+
         // If it's already a full URL, validate and use it directly
         if (name.has_prefix ("https://")) {
+            // Validate URL structure
+            try {
+                Uri.parse (name, UriFlags.NONE);
+            } catch (UriError e) {
+                warning ("Invalid homeserver URL: %s", e.message);
+                return null;
+            }
             return strip_trailing_slash (name);
         }
         if (name.has_prefix ("http://")) {
             warning ("Refusing insecure http:// homeserver URL. Use https:// instead.");
+            return null;
+        }
+
+        // Validate server name: must not contain path separators or query strings
+        if ("/" in name || "?" in name || "#" in name || " " in name) {
+            warning ("Invalid server name: contains disallowed characters");
             return null;
         }
 
@@ -141,7 +159,14 @@ public class Vigil.Services.MatrixTransportService : Object {
         }
 
         // Fallback: assume https://<server_name>
-        return "https://%s".printf (name);
+        var fallback = "https://%s".printf (name);
+        try {
+            Uri.parse (fallback, UriFlags.NONE);
+        } catch (UriError e) {
+            warning ("Invalid fallback URL for server %s: %s", name, e.message);
+            return null;
+        }
+        return fallback;
     }
 
     /**
@@ -1018,18 +1043,12 @@ public class Vigil.Services.MatrixTransportService : Object {
      * permissions, making it harder to discover than the dconf database.
      */
     public static void save_access_token_to_file (string token) {
-        var dir = Path.build_filename (
-            Environment.get_user_data_dir (),
-            "io.github.invarianz.vigil",
-            "crypto"
-        );
-        DirUtils.create_with_parents (dir, 0700);
-        FileUtils.chmod (dir, 0700);
+        var dir = SecurityUtils.get_crypto_dir ();
+        SecurityUtils.ensure_secure_directory (dir);
 
         var path = Path.build_filename (dir, "access_token");
         try {
-            FileUtils.set_contents (path, token);
-            FileUtils.chmod (path, 0600);
+            SecurityUtils.write_secure_file (path, token);
         } catch (Error e) {
             warning ("Failed to save access token to file: %s", e.message);
         }
@@ -1039,12 +1058,7 @@ public class Vigil.Services.MatrixTransportService : Object {
      * Load an access token from the secure file, or return null.
      */
     public static string? load_access_token_from_file () {
-        var path = Path.build_filename (
-            Environment.get_user_data_dir (),
-            "io.github.invarianz.vigil",
-            "crypto",
-            "access_token"
-        );
+        var path = Path.build_filename (SecurityUtils.get_crypto_dir (), "access_token");
 
         if (!FileUtils.test (path, FileTest.EXISTS)) {
             return null;

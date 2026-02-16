@@ -32,9 +32,6 @@ public class Vigil.Services.SchedulerService : Object {
 
     private uint _timeout_source = 0;
 
-    /** Cached /dev/urandom stream to avoid open/close per interval (7x faster). */
-    private DataInputStream? _urandom_stream = null;
-
     /**
      * Start the scheduler. It will emit capture_requested at random intervals.
      */
@@ -61,12 +58,6 @@ public class Vigil.Services.SchedulerService : Object {
             _timeout_source = 0;
         }
 
-        // Close the cached urandom fd
-        if (_urandom_stream != null) {
-            try { _urandom_stream.close (null); } catch (Error e) {}
-            _urandom_stream = null;
-        }
-
         is_running = false;
         next_capture_time = null;
         scheduler_stopped ();
@@ -75,36 +66,23 @@ public class Vigil.Services.SchedulerService : Object {
     /**
      * Calculate a random interval in seconds between min and max.
      *
-     * Uses a cached /dev/urandom fd (CSPRNG) so the schedule cannot be
+     * Uses SecurityUtils.csprng_uint32() so the schedule cannot be
      * predicted even by an adversary who observes past screenshot timestamps.
-     * The fd is kept open to avoid open/read/close overhead every interval.
+     * Aborts on CSPRNG failure rather than falling back to weak PRNG.
      */
     public int get_random_interval () {
-        if (min_interval_seconds >= max_interval_seconds) {
-            return min_interval_seconds;
+        // Enforce absolute minimum to prevent resource exhaustion
+        int safe_min = int.max (min_interval_seconds, SecurityUtils.ABSOLUTE_MIN_INTERVAL);
+        int safe_max = int.max (max_interval_seconds, safe_min);
+
+        if (safe_min >= safe_max) {
+            return safe_min;
         }
 
-        int range = max_interval_seconds - min_interval_seconds;
-        uint32 rand_val = 0;
+        int range = safe_max - safe_min;
+        uint32 rand_val = SecurityUtils.csprng_uint32 ();
 
-        try {
-            if (_urandom_stream == null) {
-                var file = File.new_for_path ("/dev/urandom");
-                _urandom_stream = new DataInputStream (file.read (null));
-            }
-            uint8[] buf = new uint8[4];
-            size_t bytes_read;
-            _urandom_stream.read_all (buf, out bytes_read, null);
-            rand_val = ((uint32) buf[0] << 24) |
-                       ((uint32) buf[1] << 16) |
-                       ((uint32) buf[2] << 8) |
-                       (uint32) buf[3];
-        } catch (Error e) {
-            warning ("CSPRNG unavailable: %s", e.message);
-            rand_val = Random.next_int ();
-        }
-
-        return min_interval_seconds + (int) (rand_val % (range + 1));
+        return safe_min + (int) (rand_val % (range + 1));
     }
 
     private void schedule_next () {

@@ -56,20 +56,13 @@ public class Vigil.Services.EncryptionService : Object {
     /* Crypto state storage directory */
     private string _crypto_dir;
 
-    /* Cached /dev/urandom stream for fast random generation */
-    private DataInputStream? _urandom_stream;
-
     /* Whether the Megolm session state needs to be persisted */
     private bool _group_session_dirty = false;
 
     private const int ONE_TIME_KEY_COUNT = 50;
 
     construct {
-        _crypto_dir = Path.build_filename (
-            Environment.get_user_data_dir (),
-            "io.github.invarianz.vigil",
-            "crypto"
-        );
+        _crypto_dir = SecurityUtils.get_crypto_dir ();
     }
 
     /**
@@ -84,9 +77,7 @@ public class Vigil.Services.EncryptionService : Object {
         _pickle_key = pickle_key;
 
         // Ensure crypto directory exists with restrictive permissions (0700)
-        DirUtils.create_with_parents (_crypto_dir, 0700);
-        // Enforce permissions even if directory already existed with wrong mode
-        FileUtils.chmod (_crypto_dir, 0700);
+        SecurityUtils.ensure_secure_directory (_crypto_dir);
 
         // Allocate OlmAccount
         _account_buf = new uint8[Olm.account_size ()];
@@ -109,7 +100,7 @@ public class Vigil.Services.EncryptionService : Object {
         var random = generate_random (random_len);
         var result = Olm.create_account (_account, random, random_len);
         if (result == Olm.error_val ()) {
-            warning ("olm_create_account failed: %s", Olm.account_last_error (_account));
+            debug ("olm_create_account failed (details suppressed for security)");
             return false;
         }
 
@@ -251,8 +242,7 @@ public class Vigil.Services.EncryptionService : Object {
 
         var result = Olm.init_outbound_group_session (_group_session, random, random_len);
         if (result == Olm.error_val ()) {
-            warning ("Failed to create Megolm session: %s",
-                Olm.outbound_group_session_last_error (_group_session));
+            debug ("Failed to create Megolm session (details suppressed for security)");
             return false;
         }
 
@@ -284,8 +274,7 @@ public class Vigil.Services.EncryptionService : Object {
         key_buf[key_len] = 0;
         var result = Olm.outbound_group_session_key (_group_session, key_buf, key_len);
         if (result == Olm.error_val ()) {
-            warning ("Failed to get Megolm session key: %s",
-                Olm.outbound_group_session_last_error (_group_session));
+            debug ("Failed to get Megolm session key (details suppressed for security)");
             return null;
         }
 
@@ -315,8 +304,7 @@ public class Vigil.Services.EncryptionService : Object {
         );
 
         if (result == Olm.error_val ()) {
-            warning ("Megolm encrypt failed: %s",
-                Olm.outbound_group_session_last_error (_group_session));
+            debug ("Megolm encrypt failed (details suppressed for security)");
             return null;
         }
 
@@ -415,7 +403,7 @@ public class Vigil.Services.EncryptionService : Object {
         );
 
         if (result == Olm.error_val ()) {
-            warning ("Failed to create Olm session: %s", Olm.session_last_error (session));
+            debug ("Failed to create Olm session (details suppressed for security)");
             Olm.clear_session (session);
             return null;
         }
@@ -436,7 +424,7 @@ public class Vigil.Services.EncryptionService : Object {
         );
 
         if (result == Olm.error_val ()) {
-            warning ("Olm encrypt failed: %s", Olm.session_last_error (session));
+            debug ("Olm encrypt failed (details suppressed for security)");
             Olm.clear_session (session);
             return null;
         }
@@ -506,7 +494,7 @@ public class Vigil.Services.EncryptionService : Object {
         );
 
         if (result == Olm.error_val ()) {
-            warning ("olm_account_sign failed: %s", Olm.account_last_error (_account));
+            debug ("olm_account_sign failed (details suppressed for security)");
             return "";
         }
 
@@ -546,8 +534,7 @@ public class Vigil.Services.EncryptionService : Object {
             Memory.set (pickle_copy, 0, pickle_copy.length);
 
             if (result == Olm.error_val ()) {
-                warning ("Failed to restore Megolm session: %s",
-                    Olm.outbound_group_session_last_error (_group_session));
+                debug ("Failed to restore Megolm session (details suppressed for security)");
                 _group_session = null;
                 return false;
             }
@@ -578,10 +565,6 @@ public class Vigil.Services.EncryptionService : Object {
         if (_group_session != null) {
             Olm.clear_outbound_group_session (_group_session);
             _group_session = null;
-        }
-        if (_urandom_stream != null) {
-            try { _urandom_stream.close (null); } catch (Error e) {}
-            _urandom_stream = null;
         }
         // Zero the pickle key from memory
         if (_pickle_key.length > 0) {
@@ -723,7 +706,7 @@ public class Vigil.Services.EncryptionService : Object {
 
         var result = Olm.account_identity_keys (_account, keys_buf, keys_len);
         if (result == Olm.error_val ()) {
-            warning ("Failed to get identity keys: %s", Olm.account_last_error (_account));
+            debug ("Failed to get identity keys (details suppressed for security)");
             return;
         }
 
@@ -753,7 +736,7 @@ public class Vigil.Services.EncryptionService : Object {
         );
 
         if (result == Olm.error_val ()) {
-            warning ("Failed to generate OTKs: %s", Olm.account_last_error (_account));
+            debug ("Failed to generate OTKs (details suppressed for security)");
         }
     }
 
@@ -766,7 +749,7 @@ public class Vigil.Services.EncryptionService : Object {
         var keys_buf = new uint8[keys_len + 1];
         var result = Olm.account_one_time_keys (_account, keys_buf, keys_len);
         if (result == Olm.error_val ()) {
-            warning ("Failed to get OTKs: %s", Olm.account_last_error (_account));
+            debug ("Failed to get OTKs (details suppressed for security)");
             return null;
         }
 
@@ -786,17 +769,16 @@ public class Vigil.Services.EncryptionService : Object {
         );
 
         if (result == Olm.error_val ()) {
-            warning ("Failed to pickle account: %s", Olm.account_last_error (_account));
+            debug ("Failed to pickle account (details suppressed for security)");
             return;
         }
 
         pickle_buf[pickle_len] = 0;
         var pickle_path = Path.build_filename (_crypto_dir, "account.pickle");
         try {
-            FileUtils.set_contents (pickle_path, (string) pickle_buf);
-            FileUtils.chmod (pickle_path, 0600);
+            SecurityUtils.write_secure_file (pickle_path, (string) pickle_buf);
         } catch (Error e) {
-            warning ("Failed to save account pickle: %s", e.message);
+            debug ("Failed to save account pickle: %s", e.message);
         }
     }
 
@@ -821,7 +803,7 @@ public class Vigil.Services.EncryptionService : Object {
             Memory.set (pickle_copy, 0, pickle_copy.length);
 
             if (result == Olm.error_val ()) {
-                warning ("Failed to unpickle account: %s", Olm.account_last_error (_account));
+                debug ("Failed to unpickle account (details suppressed for security)");
                 return false;
             }
 
@@ -848,18 +830,16 @@ public class Vigil.Services.EncryptionService : Object {
         );
 
         if (result == Olm.error_val ()) {
-            warning ("Failed to pickle Megolm session: %s",
-                Olm.outbound_group_session_last_error (_group_session));
+            debug ("Failed to pickle Megolm session (details suppressed for security)");
             return;
         }
 
         pickle_buf[pickle_len] = 0;
         var pickle_path = Path.build_filename (_crypto_dir, "megolm_outbound.pickle");
         try {
-            FileUtils.set_contents (pickle_path, (string) pickle_buf);
-            FileUtils.chmod (pickle_path, 0600);
+            SecurityUtils.write_secure_file (pickle_path, (string) pickle_buf);
         } catch (Error e) {
-            warning ("Failed to save Megolm pickle: %s", e.message);
+            debug ("Failed to save Megolm pickle: %s", e.message);
         }
     }
 
@@ -872,18 +852,12 @@ public class Vigil.Services.EncryptionService : Object {
      * as the same user via `dconf read` or `gsettings get`.
      */
     public static void save_pickle_key_to_file (string pickle_key) {
-        var dir = Path.build_filename (
-            Environment.get_user_data_dir (),
-            "io.github.invarianz.vigil",
-            "crypto"
-        );
-        DirUtils.create_with_parents (dir, 0700);
-        FileUtils.chmod (dir, 0700);
+        var dir = SecurityUtils.get_crypto_dir ();
+        SecurityUtils.ensure_secure_directory (dir);
 
         var path = Path.build_filename (dir, "pickle_key");
         try {
-            FileUtils.set_contents (path, pickle_key);
-            FileUtils.chmod (path, 0600);
+            SecurityUtils.write_secure_file (path, pickle_key);
         } catch (Error e) {
             warning ("Failed to save pickle key to file: %s", e.message);
         }
@@ -893,12 +867,7 @@ public class Vigil.Services.EncryptionService : Object {
      * Load the pickle key from the secure file, or return null.
      */
     public static string? load_pickle_key_from_file () {
-        var path = Path.build_filename (
-            Environment.get_user_data_dir (),
-            "io.github.invarianz.vigil",
-            "crypto",
-            "pickle_key"
-        );
+        var path = Path.build_filename (SecurityUtils.get_crypto_dir (), "pickle_key");
 
         if (!FileUtils.test (path, FileTest.EXISTS)) {
             return null;
@@ -922,38 +891,19 @@ public class Vigil.Services.EncryptionService : Object {
      * so the raw pickle key is never passed to StorageService directly.
      */
     public static string derive_hmac_key (string pickle_key) {
-        return Checksum.compute_for_string (
-            ChecksumType.SHA256,
+        return SecurityUtils.compute_sha256_hex_string (
             "vigil-marker-hmac:" + pickle_key
         );
     }
 
     /**
-     * Generate cryptographic random bytes using a cached /dev/urandom fd.
+     * Generate cryptographic random bytes.
      *
-     * Aborts on failure -- falling back to a non-CSPRNG would silently
-     * compromise all generated keys, IVs, and Olm randomness.
+     * Delegates to SecurityUtils.csprng_bytes() which uses a cached
+     * /dev/urandom fd and aborts on failure.
      */
     private uint8[] generate_random (size_t length) {
-        if (length == 0) {
-            return new uint8[0];
-        }
-
-        var buf = new uint8[length];
-
-        try {
-            if (_urandom_stream == null) {
-                var file = File.new_for_path ("/dev/urandom");
-                _urandom_stream = new DataInputStream (file.read (null));
-            }
-            size_t bytes_read;
-            _urandom_stream.read_all (buf, out bytes_read, null);
-        } catch (Error e) {
-            error ("CRITICAL: Failed to read /dev/urandom: %s. " +
-                   "Refusing to generate weak random data.", e.message);
-        }
-
-        return buf;
+        return SecurityUtils.csprng_bytes (length);
     }
 
 }

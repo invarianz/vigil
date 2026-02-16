@@ -20,20 +20,6 @@ public class Vigil.Services.StorageService : Object {
     /** Maximum number of screenshots to retain locally. */
     public int max_local_screenshots { get; set; default = 100; }
 
-    /**
-     * Compute SHA-256 hex digest using OpenSSL (5x faster than GLib.Checksum).
-     */
-    public static string compute_sha256_hex (uint8[] data) {
-        var hash = new uint8[32];
-        uint md_size;
-        OpenSSL.digest (data, data.length, hash, out md_size, OpenSSL.sha256 ());
-        var sb = new StringBuilder.sized (64);
-        for (int i = 0; i < 32; i++) {
-            sb.append_printf ("%02x", hash[i]);
-        }
-        return sb.str;
-    }
-
     /** Directory where screenshots are stored. */
     public string screenshots_dir { get; private set; }
 
@@ -83,12 +69,8 @@ public class Vigil.Services.StorageService : Object {
     public void initialize () throws Error {
         var dirs = new string[] { _base_dir, screenshots_dir, pending_dir };
         foreach (var dir_path in dirs) {
-            var dir = File.new_for_path (dir_path);
-            if (!dir.query_exists ()) {
-                dir.make_directory_with_parents (null);
-            }
             // Screenshots may contain sensitive content -- restrict access
-            FileUtils.chmod (dir_path, 0700);
+            SecurityUtils.ensure_secure_directory (dir_path);
         }
     }
 
@@ -129,9 +111,23 @@ public class Vigil.Services.StorageService : Object {
         // Compute SHA-256 hash of the screenshot for integrity verification
         string file_hash = "";
         try {
+            // Validate file size to prevent DoS from maliciously large files
+            var file_info = File.new_for_path (screenshot_path).query_info (
+                "standard::size,standard::type",
+                FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+            if (file_info.get_file_type () != FileType.REGULAR) {
+                throw new IOError.INVALID_ARGUMENT (
+                    "Screenshot is not a regular file");
+            }
+            if (file_info.get_size () > SecurityUtils.MAX_SCREENSHOT_SIZE) {
+                throw new IOError.INVALID_ARGUMENT (
+                    "Screenshot exceeds maximum size (%lld bytes)".printf (
+                        SecurityUtils.MAX_SCREENSHOT_SIZE));
+            }
+
             uint8[] file_data;
             FileUtils.get_data (screenshot_path, out file_data);
-            file_hash = compute_sha256_hex (file_data);
+            file_hash = SecurityUtils.compute_sha256_hex (file_data);
         } catch (Error e) {
             // File may not exist yet in tests; not fatal -- integrity
             // check will treat empty hash as "no baseline" and accept.
@@ -220,7 +216,7 @@ public class Vigil.Services.StorageService : Object {
                 }
             }
 
-            var current_hash = compute_sha256_hex (file_data);
+            var current_hash = SecurityUtils.compute_sha256_hex (file_data);
 
             return current_hash == stored_hash;
         } catch (Error e) {
@@ -340,17 +336,23 @@ public class Vigil.Services.StorageService : Object {
             }
 
             var enumerator = dir.enumerate_children (
-                "standard::name,time::modified",
-                FileQueryInfoFlags.NONE,
+                "standard::name,standard::type,time::modified",
+                FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
                 null
             );
 
-            // Collect all screenshot files with their modification time
+            // Collect all regular screenshot files with their modification time.
+            // Use NOFOLLOW_SYMLINKS to prevent symlink attacks during cleanup.
             var screenshot_files = new GenericArray<ScreenshotFile?> ();
             FileInfo? info;
             while ((info = enumerator.next_file (null)) != null) {
                 var name = info.get_name ();
                 if (!name.has_suffix (".png")) {
+                    continue;
+                }
+
+                // Skip non-regular files (symlinks, directories)
+                if (info.get_file_type () != FileType.REGULAR) {
                     continue;
                 }
 
