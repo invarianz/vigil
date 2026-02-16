@@ -939,7 +939,7 @@ async bool test_full_e2ee_flow_async () {
         }
 
         debug ("Partner decrypted screenshot event: %s",
-            plaintext.length > 200 ? plaintext.substring (0, 200) + "..." : plaintext);
+            plaintext.length > 200 ? plaintext.substring (0, 200) + "\u2026" : plaintext);
 
         // Parse the decrypted event
         var pt_parser = new Json.Parser ();
