@@ -1,0 +1,47 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/elementary/docker:stable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            valac meson \
+            libglib2.0-dev \
+            libgranite-7-dev \
+            libgtk-4-dev \
+            libjson-glib-dev \
+            libsoup-3.0-dev \
+            libportal-dev \
+            libportal-gtk4-dev \
+            libolm-dev \
+            libssl-dev
+
+      - name: Configure
+        run: meson setup build
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Run benchmarks
+        run: meson test -C build --benchmark --print-errorlogs
+
+      - name: Upload benchmark log
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-log
+          path: build/meson-logs/benchmarklog.txt

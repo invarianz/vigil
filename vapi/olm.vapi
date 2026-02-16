@@ -189,4 +189,53 @@ namespace Olm {
     [CCode (cname = "olm_unpickle_outbound_group_session")]
     public size_t unpickle_outbound_group_session (void* session, void* key, size_t key_len,
                                                     void* pickled, size_t pickled_len);
+
+    /* ────────── OlmSession inbound (decrypt Olm pre-key messages) ────────── */
+
+    [CCode (cname = "olm_create_inbound_session_from")]
+    public size_t create_inbound_session_from (void* session, void* account,
+                                                void* their_id_key, size_t their_id_key_len,
+                                                void* message, size_t message_len);
+
+    [CCode (cname = "olm_decrypt_max_plaintext_length")]
+    public size_t decrypt_max_plaintext_length (void* session,
+                                                 size_t message_type,
+                                                 void* message, size_t message_len);
+
+    [CCode (cname = "olm_decrypt")]
+    public size_t decrypt (void* session,
+                            size_t message_type,
+                            void* message, size_t message_len,
+                            void* plaintext, size_t max_plaintext_len);
+
+    [CCode (cname = "olm_remove_one_time_keys")]
+    public size_t remove_one_time_keys (void* account, void* session);
+
+    /* ────────── OlmInboundGroupSession (Megolm decryption) ────────── */
+
+    [CCode (cname = "olm_inbound_group_session_size")]
+    public size_t inbound_group_session_size ();
+
+    [CCode (cname = "olm_inbound_group_session")]
+    public void* inbound_group_session_init (void* memory);
+
+    [CCode (cname = "olm_clear_inbound_group_session")]
+    public size_t clear_inbound_group_session (void* session);
+
+    [CCode (cname = "olm_inbound_group_session_last_error")]
+    public unowned string inbound_group_session_last_error (void* session);
+
+    [CCode (cname = "olm_init_inbound_group_session")]
+    public size_t init_inbound_group_session (void* session,
+                                               uint8* session_key, size_t session_key_len);
+
+    [CCode (cname = "olm_group_decrypt_max_plaintext_length")]
+    public size_t group_decrypt_max_plaintext_length (void* session,
+                                                       uint8* message, size_t message_len);
+
+    [CCode (cname = "olm_group_decrypt")]
+    public size_t group_decrypt (void* session,
+                                  uint8* message, size_t message_len,
+                                  uint8* plaintext, size_t max_plaintext_len,
+                                  out uint32 message_index);
 }

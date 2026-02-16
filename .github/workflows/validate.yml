@@ -1,0 +1,19 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate MetaInfo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate metainfo
+        uses: elementary/validate-metainfo@master
+        with:
+          path: data/vigil.metainfo.xml.in

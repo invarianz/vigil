@@ -860,6 +860,10 @@ public class Vigil.Services.EncryptionService : Object {
      * compromise all generated keys, IVs, and Olm randomness.
      */
     private uint8[] generate_random (size_t length) {
+        if (length == 0) {
+            return new uint8[0];
+        }
+
         var buf = new uint8[length];
 
         try {

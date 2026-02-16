@@ -53,6 +53,7 @@ endforeach
 # Integration tests -- may use D-Bus, async patterns, mock backends
 integration_tests = {
     'ScreenshotService': 'ScreenshotServiceTest.vala',
+    'MatrixE2EEIntegration': 'MatrixE2EEIntegrationTest.vala',
 }
 
 foreach name, source : integration_tests
@@ -66,7 +67,7 @@ foreach name, source : integration_tests
 
     test(name, test_exe,
         suite: 'integration',
-        timeout: 30,
+        timeout: name == 'MatrixE2EEIntegration' ? 60 : 30,
         env: test_env,
     )
 endforeach

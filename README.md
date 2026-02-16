@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/invarianz/Vigil/actions/workflows/ci.yml"><img src="https://github.com/invarianz/Vigil/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/invarianz/Vigil/actions/workflows/build-test.yml"><img src="https://github.com/invarianz/Vigil/actions/workflows/build-test.yml/badge.svg" alt="Build & Test"></a>
   <a href="https://github.com/invarianz/Vigil/blob/main/COPYING"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg" alt="License: GPL-3.0-or-later"></a>
   <img src="https://img.shields.io/badge/platform-elementary%20OS%207%20%7C%208-64BAFF.svg" alt="Platform: elementary OS 7 | 8">
   <img src="https://img.shields.io/badge/GTK-4-4A86CF.svg" alt="GTK 4">

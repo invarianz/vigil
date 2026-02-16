@@ -40,6 +40,21 @@ namespace OpenSSL {
         public int encrypt_final ([CCode (array_length = false)] uint8[] out_buf,
                                   out int out_len);
 
+        [CCode (cname = "EVP_DecryptInit_ex")]
+        public int decrypt_init (Cipher? cipher, void* engine,
+                                 [CCode (array_length = false)] uint8[]? key,
+                                 [CCode (array_length = false)] uint8[]? iv);
+
+        [CCode (cname = "EVP_DecryptUpdate")]
+        public int decrypt_update ([CCode (array_length = false)] uint8[] out_buf,
+                                   out int out_len,
+                                   [CCode (array_length = false)] uint8[] in_buf,
+                                   int in_len);
+
+        [CCode (cname = "EVP_DecryptFinal_ex")]
+        public int decrypt_final ([CCode (array_length = false)] uint8[] out_buf,
+                                  out int out_len);
+
         [CCode (cname = "EVP_CIPHER_CTX_set_padding")]
         public int set_padding (int pad);
     }
