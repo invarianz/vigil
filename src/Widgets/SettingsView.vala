@@ -435,8 +435,10 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         );
 
         if (result != 1) {
-            warning ("PBKDF2 failed, falling back to SHA-256");
-            return Checksum.compute_for_string (ChecksumType.SHA256, code);
+            // Refuse to silently downgrade -- weak hashing would compromise
+            // the unlock code's brute-force resistance.
+            error ("PBKDF2 failed: OpenSSL returned %d. " +
+                   "Refusing to fall back to weak hashing.", result);
         }
 
         return "%s:%s".printf (bytes_to_hex (salt), bytes_to_hex (derived));
@@ -446,6 +448,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
      * Verify an unlock code against a stored hash.
      *
      * Supports both PBKDF2 format (salt:hash) and legacy SHA-256.
+     * Uses constant-time comparison to prevent timing side-channel attacks.
      */
     private bool verify_code (string code, string stored_hash) {
         if (":" in stored_hash) {
@@ -454,11 +457,29 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             var salt = hex_to_bytes (parts[0]);
             if (salt == null) return false;
             var expected = hash_code_with_salt (code, salt);
-            return expected == stored_hash;
+            return constant_time_equal (expected, stored_hash);
         } else {
             // Legacy SHA-256 format
-            return Checksum.compute_for_string (ChecksumType.SHA256, code) == stored_hash;
+            var computed = Checksum.compute_for_string (ChecksumType.SHA256, code);
+            return constant_time_equal (computed, stored_hash);
         }
+    }
+
+    /**
+     * Constant-time string comparison to prevent timing side-channel attacks.
+     *
+     * Always compares all bytes regardless of where mismatches occur,
+     * so an attacker cannot infer correct characters from response timing.
+     */
+    private static bool constant_time_equal (string a, string b) {
+        if (a.length != b.length) {
+            return false;
+        }
+        uint8 result = 0;
+        for (int i = 0; i < a.length; i++) {
+            result |= (uint8) (a[i] ^ b[i]);
+        }
+        return result == 0;
     }
 
     private static string bytes_to_hex (uint8[] data) {

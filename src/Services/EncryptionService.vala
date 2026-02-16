@@ -542,6 +542,9 @@ public class Vigil.Services.EncryptionService : Object {
                 pickle_copy, pickle_copy.length
             );
 
+            // Zero the pickle copy -- it contained encrypted key material
+            Memory.set (pickle_copy, 0, pickle_copy.length);
+
             if (result == Olm.error_val ()) {
                 warning ("Failed to restore Megolm session: %s",
                     Olm.outbound_group_session_last_error (_group_session));
@@ -579,6 +582,10 @@ public class Vigil.Services.EncryptionService : Object {
         if (_urandom_stream != null) {
             try { _urandom_stream.close (null); } catch (Error e) {}
             _urandom_stream = null;
+        }
+        // Zero the pickle key from memory
+        if (_pickle_key.length > 0) {
+            _pickle_key = "";
         }
         is_ready = false;
     }
@@ -809,6 +816,9 @@ public class Vigil.Services.EncryptionService : Object {
                 key_data, key_data.length,
                 pickle_copy, pickle_copy.length
             );
+
+            // Zero the pickle copy -- it contained encrypted key material
+            Memory.set (pickle_copy, 0, pickle_copy.length);
 
             if (result == Olm.error_val ()) {
                 warning ("Failed to unpickle account: %s", Olm.account_last_error (_account));
