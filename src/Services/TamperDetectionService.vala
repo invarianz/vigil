@@ -111,7 +111,7 @@ public class Vigil.Services.TamperDetectionService : Object {
         // secret, to avoid passing the key through unnecessary code paths.
         var pickle_key_set = _settings.get_string ("e2ee-pickle-key") != "";
 
-        var data = "%s|%s|%s|%d|%d|%d|%b|%s|%b".printf (
+        var data = "%s|%s|%s|%d|%d|%d|%b|%s|%b|%s|%d|%d|%d".printf (
             _settings.get_string ("matrix-homeserver-url"),
             _settings.get_string ("matrix-access-token"),
             _settings.get_string ("matrix-room-id"),
@@ -120,7 +120,11 @@ public class Vigil.Services.TamperDetectionService : Object {
             _settings.get_int ("max-local-screenshots"),
             _settings.get_boolean ("monitoring-enabled"),
             _settings.get_string ("device-id"),
-            pickle_key_set
+            pickle_key_set,
+            _settings.get_string ("partner-matrix-id"),
+            _settings.get_int ("heartbeat-interval-seconds"),
+            _settings.get_int ("upload-batch-interval-seconds"),
+            _settings.get_int ("tamper-check-interval-seconds")
         );
 
         return Checksum.compute_for_string (ChecksumType.SHA256, data);
@@ -216,6 +220,34 @@ public class Vigil.Services.TamperDetectionService : Object {
                 "Matrix transport settings are partially cleared (transport broken)");
         }
 
+        // Check if service timers have been set dangerously high.
+        // Heartbeat > 1 hour, upload batch > 1 hour, tamper check > 30 min
+        // are all far beyond the defaults and indicate intentional tampering.
+        int heartbeat_interval = _settings.get_int ("heartbeat-interval-seconds");
+        if (heartbeat_interval > 3600) {
+            emit_tamper ("timer_tampered",
+                "Heartbeat interval set to %d seconds (> 1 hour)".printf (heartbeat_interval));
+        }
+
+        int upload_batch_interval = _settings.get_int ("upload-batch-interval-seconds");
+        if (upload_batch_interval > 3600) {
+            emit_tamper ("timer_tampered",
+                "Upload batch interval set to %d seconds (> 1 hour)".printf (upload_batch_interval));
+        }
+
+        int tamper_check_interval = _settings.get_int ("tamper-check-interval-seconds");
+        if (tamper_check_interval > 1800) {
+            emit_tamper ("timer_tampered",
+                "Tamper check interval set to %d seconds (> 30 min)".printf (tamper_check_interval));
+        }
+
+        // Check if partner Matrix ID was changed or cleared
+        string partner_id = _settings.get_string ("partner-matrix-id");
+        if (hs_url != "" && token != "" && room_id != "" && partner_id == "") {
+            emit_tamper ("partner_changed",
+                "Partner Matrix ID was cleared while transport is configured");
+        }
+
         // Check if E2EE settings were cleared
         string device_id = _settings.get_string ("device-id");
         string pickle_key = _settings.get_string ("e2ee-pickle-key");
@@ -305,7 +337,11 @@ public class Vigil.Services.TamperDetectionService : Object {
             "device-id",
             "e2ee-pickle-key",
             "settings-locked",
-            "unlock-code-hash"
+            "unlock-code-hash",
+            "heartbeat-interval-seconds",
+            "upload-batch-interval-seconds",
+            "tamper-check-interval-seconds",
+            "partner-matrix-id"
         };
 
         foreach (var key in critical_keys) {
@@ -316,6 +352,16 @@ public class Vigil.Services.TamperDetectionService : Object {
                 }
             });
         }
+    }
+
+    /**
+     * Emit a tamper event for E2EE initialization failure.
+     * Called by the daemon when E2EE was configured but failed to start.
+     */
+    public void emit_e2ee_init_failure () {
+        emit_tamper ("e2ee_init_failed",
+            "E2EE initialization failed at startup -- " +
+            "monitoring will not send screenshots until encryption is restored");
     }
 
     private void emit_tamper (string event_type, string details) {

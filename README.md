@@ -92,6 +92,74 @@ To change settings later, you'll need to ask your partner for the code. If someo
 
 Switch to the Status tab and enable monitoring. Vigil starts capturing in the background and keeps running as a system service, even after you close the window.
 
+## What your partner sees
+
+Vigil communicates with your partner through different types of messages. Here's what each one looks like and what it means.
+
+### Normal operation
+
+> Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0 | next check-in by: 14:35
+
+This is a regular heartbeat, sent every 15 minutes. It tells your partner everything is running smoothly. The "next check-in by" time is the deadline -- if no new message arrives by then, something may be wrong.
+
+### Clean shutdown (computer turned off or restarted)
+
+> STATUS: Vigil going offline (clean shutdown, this is normal) | uptime was: 4h 12m | pending: 0
+
+When you shut down or restart your computer, Vigil sends this message before it stops. Your partner knows the silence that follows is expected and not suspicious. When your computer starts up again, the next heartbeat will mention the gap:
+
+> Vigil active | uptime: 0h 1m | screenshots: 0 | pending: 0 | resumed after 8h 15m gap (device was asleep or offline, this is normal) | next check-in by: 08:20
+
+### Sleep and wake
+
+If your computer was asleep (lid closed, suspended), the next heartbeat reports exactly how long the gap was. Your partner can see the gap duration and judge whether it makes sense (e.g. overnight sleep vs. suspicious midday silence).
+
+### Network outage
+
+If Vigil can't reach the server, it keeps trying. Once the connection is restored, the heartbeat reports how many check-ins were missed:
+
+> Vigil active | uptime: 3h 0m | screenshots: 12 | pending: 5 | recovering: 3 heartbeats were missed | next check-in by: 15:45
+
+Screenshots taken while offline are queued and delivered as soon as the connection comes back.
+
+### Tamper alerts
+
+If someone tries to interfere with Vigil, a bold alert is sent immediately -- it doesn't wait for the next heartbeat:
+
+> **TAMPER ALERT [autostart_missing]**
+> Autostart desktop entry is missing
+
+These alerts fire when:
+
+| Alert type | What happened |
+|---|---|
+| `monitoring_disabled` | Screenshot monitoring was turned off |
+| `interval_tampered` | Screenshot intervals were set unreasonably high |
+| `timer_tampered` | Heartbeat, upload, or tamper-check timers were increased beyond safe limits |
+| `matrix_cleared` | All Matrix connection settings were deleted |
+| `matrix_incomplete` | Some Matrix settings were deleted (breaks the connection) |
+| `partner_changed` | The partner Matrix ID was changed or cleared |
+| `e2ee_disabled` | Encryption keys were cleared |
+| `autostart_missing` | The autostart entry was deleted |
+| `autostart_modified` | The autostart entry was changed to point elsewhere |
+| `systemd_disabled` | The system service was disabled |
+| `settings_unlocked` | The settings lock was bypassed |
+| `unlock_code_cleared` | The unlock code was erased while settings are locked |
+| `binary_modified` | The Vigil program file was replaced |
+| `e2ee_init_failed` | Encryption failed to start -- screenshots would be sent unencrypted, so monitoring is refused |
+
+### Forced kill or uninstall
+
+If Vigil is killed with `kill -9`, the power is pulled, or it's uninstalled entirely, there is no opportunity to send a message. This is exactly what the dead man's switch handles: the "next check-in by" deadline passes with no message, and your partner knows something is wrong.
+
+### What your partner needs to remember
+
+1. **Regular messages arriving on time** = everything is fine
+2. **"Going offline (clean shutdown)"** = computer was turned off normally, expect silence
+3. **"Resumed after Xm gap"** = computer was asleep or offline, now back
+4. **"TAMPER ALERT"** = something suspicious, investigate
+5. **Deadline passes with no message at all** = most serious; Vigil was forcibly stopped
+
 ## Security and encryption
 
 Vigil implements the Matrix end-to-end encryption protocol natively using libolm. No external encryption proxy is needed.

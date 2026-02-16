@@ -61,20 +61,46 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         var user_id = settings.get_string ("matrix-user-id");
         var pickle_key = settings.get_string ("e2ee-pickle-key");
 
-        if (device_id != "" && user_id != "" && pickle_key != "") {
+        bool e2ee_expected = device_id != "" && user_id != "" && pickle_key != "";
+        bool e2ee_ok = false;
+
+        if (e2ee_expected) {
             enc_svc.device_id = device_id;
             enc_svc.user_id = user_id;
             if (enc_svc.initialize (pickle_key)) {
                 enc_svc.restore_group_session ();
                 debug ("E2EE initialized (session: %s)", enc_svc.megolm_session_id);
+                e2ee_ok = true;
             } else {
-                warning ("E2EE initialization failed, messages will be unencrypted");
+                warning ("E2EE initialization failed -- refusing to send unencrypted");
             }
         }
-        matrix_svc.encryption = enc_svc;
+
+        // Only attach encryption service if it initialized successfully.
+        // If E2EE was expected but failed, leave encryption null so
+        // MatrixTransportService refuses to send (no silent plaintext fallback).
+        if (e2ee_ok) {
+            matrix_svc.encryption = enc_svc;
+        }
 
         _heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
         _tamper_svc = new Vigil.Services.TamperDetectionService (settings);
+
+        // If E2EE was configured but failed to initialize, fire a tamper
+        // alert so the partner knows encryption is broken. This is more
+        // visible than a log warning that nobody reads.
+        if (e2ee_expected && !e2ee_ok) {
+            _tamper_svc.tamper_detected.connect ((event_type, details) => {
+                // Will be delivered once Matrix transport is configured
+            });
+            _heartbeat_svc.report_tamper_event (
+                "E2EE initialization failed -- screenshots will NOT be sent " +
+                "until encryption is restored (pickle file may be corrupt " +
+                "or E2EE password may have changed)"
+            );
+            // Also emit as a tamper signal for immediate alert delivery
+            _tamper_svc.emit_e2ee_init_failure ();
+        }
 
         _dbus_server = new Vigil.Daemon.DBusServer (
             _screenshot_svc,

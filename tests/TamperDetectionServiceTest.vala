@@ -126,10 +126,11 @@ void test_config_hash_changes_on_setting_change () {
 void test_settings_sanity_monitoring_disabled () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", false);
-    // Set Matrix settings so matrix_cleared doesn't also fire
+    // Set Matrix settings so matrix_cleared / partner_changed don't also fire
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -148,10 +149,11 @@ void test_settings_sanity_interval_tampered () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
     settings.set_int ("min-interval-seconds", 600);
-    // Set Matrix settings so matrix_cleared doesn't also fire
+    // Set Matrix settings so matrix_cleared / partner_changed don't also fire
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -305,6 +307,161 @@ void test_settings_lock_no_tamper_when_properly_locked () {
     settings.set_string ("unlock-code-hash", "");
 }
 
+void test_heartbeat_interval_tampered () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+    settings.set_int ("heartbeat-interval-seconds", 7200);
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    GenericArray<string> events = new GenericArray<string> ();
+    svc.tamper_detected.connect ((t, d) => {
+        events.add (t);
+    });
+
+    svc.check_settings_sanity ();
+
+    bool found = false;
+    for (int i = 0; i < events.length; i++) {
+        if (events[i] == "timer_tampered") found = true;
+    }
+    assert_true (found);
+
+    // Reset
+    settings.set_int ("heartbeat-interval-seconds", 900);
+}
+
+void test_upload_batch_interval_tampered () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+    settings.set_int ("upload-batch-interval-seconds", 5000);
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    GenericArray<string> events = new GenericArray<string> ();
+    svc.tamper_detected.connect ((t, d) => {
+        events.add (t);
+    });
+
+    svc.check_settings_sanity ();
+
+    bool found = false;
+    for (int i = 0; i < events.length; i++) {
+        if (events[i] == "timer_tampered") found = true;
+    }
+    assert_true (found);
+
+    // Reset
+    settings.set_int ("upload-batch-interval-seconds", 600);
+}
+
+void test_tamper_check_interval_tampered () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+    settings.set_int ("tamper-check-interval-seconds", 3600);
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    GenericArray<string> events = new GenericArray<string> ();
+    svc.tamper_detected.connect ((t, d) => {
+        events.add (t);
+    });
+
+    svc.check_settings_sanity ();
+
+    bool found = false;
+    for (int i = 0; i < events.length; i++) {
+        if (events[i] == "timer_tampered") found = true;
+    }
+    assert_true (found);
+
+    // Reset
+    settings.set_int ("tamper-check-interval-seconds", 120);
+}
+
+void test_partner_id_cleared () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    GenericArray<string> events = new GenericArray<string> ();
+    svc.tamper_detected.connect ((t, d) => {
+        events.add (t);
+    });
+
+    svc.check_settings_sanity ();
+
+    bool found = false;
+    for (int i = 0; i < events.length; i++) {
+        if (events[i] == "partner_changed") found = true;
+    }
+    assert_true (found);
+
+    // Reset
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+}
+
+void test_timers_within_limits_no_tamper () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+    settings.set_int ("heartbeat-interval-seconds", 900);
+    settings.set_int ("upload-batch-interval-seconds", 600);
+    settings.set_int ("tamper-check-interval-seconds", 120);
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+    });
+
+    svc.check_settings_sanity ();
+    assert_true (event_type == null);
+}
+
+void test_e2ee_init_failure_event () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+    });
+
+    svc.emit_e2ee_init_failure ();
+    assert_true (event_type == "e2ee_init_failed");
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -323,6 +480,12 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/lock_bypass_detected", test_settings_lock_bypass_detected);
     Test.add_func ("/tamper/lock_hash_cleared", test_settings_lock_hash_cleared_detected);
     Test.add_func ("/tamper/lock_properly_locked", test_settings_lock_no_tamper_when_properly_locked);
+    Test.add_func ("/tamper/heartbeat_interval_tampered", test_heartbeat_interval_tampered);
+    Test.add_func ("/tamper/upload_batch_interval_tampered", test_upload_batch_interval_tampered);
+    Test.add_func ("/tamper/tamper_check_interval_tampered", test_tamper_check_interval_tampered);
+    Test.add_func ("/tamper/partner_id_cleared", test_partner_id_cleared);
+    Test.add_func ("/tamper/timers_within_limits", test_timers_within_limits_no_tamper);
+    Test.add_func ("/tamper/e2ee_init_failure", test_e2ee_init_failure_event);
 
     return Test.run ();
 }
