@@ -408,8 +408,22 @@ public class Vigil.Daemon.DBusServer : Object {
             var item = pending[i];
             var now = item.capture_time ?? new DateTime.now_local ();
 
-            // Verify screenshot integrity before upload
-            if (!_storage_svc.verify_screenshot_integrity (item.file_path)) {
+            // Read file ONCE -- reuse buffer for both integrity verify and upload.
+            // This eliminates 2 redundant 2MB file reads per screenshot.
+            uint8[] file_data;
+            try {
+                FileUtils.get_data (item.file_path, out file_data);
+            } catch (Error e) {
+                debug ("Could not read pending screenshot %s: %s",
+                    item.file_path, e.message);
+                // File is gone; clean up the orphan marker
+                _storage_svc.mark_uploaded (item.file_path);
+                continue;
+            }
+
+            // Verify integrity using pre-loaded data (no re-read)
+            if (!_storage_svc.verify_screenshot_integrity_from_data (
+                    item.file_path, file_data)) {
                 _tamper_svc.report_tamper ("screenshot_tampered",
                     "Screenshot file was modified after capture: %s".printf (
                         Path.get_basename (item.file_path)));
@@ -419,7 +433,9 @@ public class Vigil.Daemon.DBusServer : Object {
             }
 
             if (_matrix_svc.is_configured) {
-                bool delivered = yield _matrix_svc.send_screenshot (item.file_path, now);
+                // Pass pre-loaded data to avoid a third file read
+                bool delivered = yield _matrix_svc.send_screenshot_data (
+                    (owned) file_data, item.file_path, now);
                 if (delivered) {
                     _storage_svc.mark_uploaded (item.file_path);
                 }

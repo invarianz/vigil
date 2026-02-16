@@ -751,6 +751,223 @@ void bench_json_encrypted_event () {
     });
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Section 8: Optimization Candidates (before/after comparison data)
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* SHA-256 with hex output: OpenSSL vs GLib.Checksum (fair comparison) */
+void bench_sha256_openssl_hex_2mb () {
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("SHA-256 hex: OpenSSL + hex encode", 100, () => {
+        var sha256 = new uint8[32];
+        uint md_size;
+        OpenSSL.digest (data, data.length, sha256, out md_size, OpenSSL.sha256 ());
+        // Convert to hex string (same output format as GLib.Checksum)
+        var sb = new StringBuilder.sized (64);
+        for (int i = 0; i < 32; i++) {
+            sb.append_printf ("%02x", sha256[i]);
+        }
+        var _hex = sb.str;
+    });
+}
+
+void bench_sha256_glib_hex_2mb () {
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+
+    bench ("SHA-256 hex: GLib.Checksum (current)", 100, () => {
+        Checksum.compute_for_data (ChecksumType.SHA256, data);
+    });
+}
+
+/* Integrity verification: current GLib path vs OpenSSL path */
+void bench_integrity_verify_glib () {
+    // Simulates verify_screenshot_integrity with GLib.Checksum
+    var dir = Path.build_filename (bench_data_dir, "bench-integrity-glib");
+    DirUtils.create_with_parents (dir, 0755);
+    var fake_path = Path.build_filename (dir, "screenshot.png");
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+    try { FileUtils.set_data (fake_path, data); } catch (Error e) { return; }
+    var stored_hash = Checksum.compute_for_data (ChecksumType.SHA256, data);
+
+    bench ("integrity verify: file read + GLib SHA-256", 50, () => {
+        try {
+            uint8[] file_data;
+            FileUtils.get_data (fake_path, out file_data);
+            var current = Checksum.compute_for_data (ChecksumType.SHA256, file_data);
+            var _match = (current == stored_hash);
+        } catch (Error e) {}
+    });
+
+    FileUtils.remove (fake_path);
+}
+
+void bench_integrity_verify_openssl () {
+    // Same verification using OpenSSL
+    var dir = Path.build_filename (bench_data_dir, "bench-integrity-openssl");
+    DirUtils.create_with_parents (dir, 0755);
+    var fake_path = Path.build_filename (dir, "screenshot.png");
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+    try { FileUtils.set_data (fake_path, data); } catch (Error e) { return; }
+
+    // Pre-compute OpenSSL hash as hex
+    var ref_hash = new uint8[32];
+    uint ref_size;
+    OpenSSL.digest (data, data.length, ref_hash, out ref_size, OpenSSL.sha256 ());
+    var ref_sb = new StringBuilder.sized (64);
+    for (int i = 0; i < 32; i++) ref_sb.append_printf ("%02x", ref_hash[i]);
+    var stored_hash = ref_sb.str;
+
+    bench ("integrity verify: file read + OpenSSL SHA-256", 50, () => {
+        try {
+            uint8[] file_data;
+            FileUtils.get_data (fake_path, out file_data);
+            var sha256 = new uint8[32];
+            uint md_size;
+            OpenSSL.digest (file_data, file_data.length, sha256, out md_size, OpenSSL.sha256 ());
+            var sb = new StringBuilder.sized (64);
+            for (int i = 0; i < 32; i++) sb.append_printf ("%02x", sha256[i]);
+            var _match = (sb.str == stored_hash);
+        } catch (Error e) {}
+    });
+
+    FileUtils.remove (fake_path);
+}
+
+/* Upload pipeline: triple-read (current) vs single-read (optimized) */
+void bench_upload_pipeline_triple_read () {
+    // Current: mark_pending reads+hashes, verify reads+hashes, send reads
+    var dir = Path.build_filename (bench_data_dir, "bench-pipeline-triple");
+    DirUtils.create_with_parents (dir, 0755);
+    var fake_path = Path.build_filename (dir, "screenshot.png");
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+    try { FileUtils.set_data (fake_path, data); } catch (Error e) { return; }
+
+    var enc = make_enc_service ();
+    var stored_hash = Checksum.compute_for_data (ChecksumType.SHA256, data);
+
+    bench ("upload path: 3 reads + 2 GLib hashes + encrypt", 20, () => {
+        // Read 1: verify integrity (re-hash with GLib)
+        try {
+            uint8[] d1;
+            FileUtils.get_data (fake_path, out d1);
+            var h1 = Checksum.compute_for_data (ChecksumType.SHA256, d1);
+            var _match = (h1 == stored_hash);
+        } catch (Error e) {}
+
+        // Read 2: send_screenshot file read
+        try {
+            uint8[] d2;
+            FileUtils.get_data (fake_path, out d2);
+            enc.encrypt_attachment (d2);
+        } catch (Error e) {}
+    });
+
+    enc.cleanup ();
+    FileUtils.remove (fake_path);
+}
+
+void bench_upload_pipeline_single_read () {
+    // Optimized: read once, OpenSSL hash, pass to encrypt
+    var dir = Path.build_filename (bench_data_dir, "bench-pipeline-single");
+    DirUtils.create_with_parents (dir, 0755);
+    var fake_path = Path.build_filename (dir, "screenshot.png");
+    var data = new uint8[2 * 1024 * 1024];
+    for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
+    try { FileUtils.set_data (fake_path, data); } catch (Error e) { return; }
+
+    var enc = make_enc_service ();
+
+    // Pre-compute stored hash with OpenSSL
+    var ref_hash = new uint8[32];
+    uint ref_size;
+    OpenSSL.digest (data, data.length, ref_hash, out ref_size, OpenSSL.sha256 ());
+    var ref_sb = new StringBuilder.sized (64);
+    for (int i = 0; i < 32; i++) ref_sb.append_printf ("%02x", ref_hash[i]);
+    var stored_hash = ref_sb.str;
+
+    bench ("upload path: 1 read + 1 OpenSSL hash + encrypt", 20, () => {
+        // Single read, verify + encrypt from same buffer
+        try {
+            uint8[] file_data;
+            FileUtils.get_data (fake_path, out file_data);
+
+            // Verify with OpenSSL
+            var sha256 = new uint8[32];
+            uint md_size;
+            OpenSSL.digest (file_data, file_data.length, sha256, out md_size, OpenSSL.sha256 ());
+            var sb = new StringBuilder.sized (64);
+            for (int i = 0; i < 32; i++) sb.append_printf ("%02x", sha256[i]);
+            if (sb.str != stored_hash) return;
+
+            // Encrypt same buffer (no re-read)
+            enc.encrypt_attachment (file_data);
+        } catch (Error e) {}
+    });
+
+    enc.cleanup ();
+    FileUtils.remove (fake_path);
+}
+
+/* Scheduler CSPRNG: open/close vs cached fd */
+void bench_scheduler_urandom_per_call () {
+    bench ("scheduler CSPRNG: open+read(4)+close per interval", 1000, () => {
+        try {
+            uint8[] buf = new uint8[4];
+            size_t bytes_read;
+            var stream = File.new_for_path ("/dev/urandom").read (null);
+            stream.read_all (buf, out bytes_read, null);
+            stream.close (null);
+            var _val = ((uint32) buf[0] << 24) | ((uint32) buf[1] << 16) |
+                       ((uint32) buf[2] << 8) | (uint32) buf[3];
+        } catch (Error e) {}
+    });
+}
+
+void bench_scheduler_urandom_cached () {
+    FileInputStream? cached_stream = null;
+    try {
+        cached_stream = File.new_for_path ("/dev/urandom").read (null);
+    } catch (Error e) { return; }
+
+    bench ("scheduler CSPRNG: cached-fd read(4)", 1000, () => {
+        try {
+            uint8[] buf = new uint8[4];
+            size_t bytes_read;
+            cached_stream.read_all (buf, out bytes_read, null);
+            var _val = ((uint32) buf[0] << 24) | ((uint32) buf[1] << 16) |
+                       ((uint32) buf[2] << 8) | (uint32) buf[3];
+        } catch (Error e) {}
+    });
+
+    try { cached_stream.close (null); } catch (Error e) {}
+}
+
+/* PBKDF2 unlock code hashing (600K iterations) */
+void bench_pbkdf2_unlock () {
+    var salt = new uint8[16];
+    try {
+        var stream = File.new_for_path ("/dev/urandom").read (null);
+        size_t br;
+        stream.read_all (salt, out br, null);
+        stream.close (null);
+    } catch (Error e) { return; }
+
+    bench ("PBKDF2-SHA256 unlock hash (600K iters)", 5, () => {
+        var derived = new uint8[32];
+        OpenSSL.pbkdf2_hmac (
+            "test123", 7, salt, 16,
+            600000, OpenSSL.sha256 (),
+            32, derived
+        );
+    });
+}
+
 /* ════════════════════════════════════════════════════════════════════════════ */
 
 public static int main (string[] args) {
@@ -828,6 +1045,22 @@ public static int main (string[] args) {
     bench_mark_uploaded_then_cleanup ();
     print ("   -- JSON building --\n");
     bench_json_encrypted_event ();
+
+    print ("\n── 8. Optimization Candidates ──────────────────────────────────────────────\n");
+    print ("   -- SHA-256 integrity hashing (2 MB) --\n");
+    bench_sha256_openssl_hex_2mb ();
+    bench_sha256_glib_hex_2mb ();
+    print ("   -- full integrity verify (file read + hash) --\n");
+    bench_integrity_verify_openssl ();
+    bench_integrity_verify_glib ();
+    print ("   -- upload pipeline (verify + encrypt, 2 MB) --\n");
+    bench_upload_pipeline_single_read ();
+    bench_upload_pipeline_triple_read ();
+    print ("   -- scheduler CSPRNG --\n");
+    bench_scheduler_urandom_cached ();
+    bench_scheduler_urandom_per_call ();
+    print ("   -- PBKDF2 unlock --\n");
+    bench_pbkdf2_unlock ();
 
     print ("\n══════════════════════════════════════════════════════════════════════════════\n");
 

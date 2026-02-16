@@ -718,6 +718,70 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
+     * Upload and send pre-loaded screenshot data to the Matrix room.
+     *
+     * Accepts file data that has already been read into memory, avoiding
+     * a redundant file read when the caller has the data (e.g. after
+     * integrity verification in the upload pipeline).
+     */
+    public async bool send_screenshot_data (owned uint8[] file_data,
+                                             string file_path,
+                                             DateTime capture_time) {
+        if (!is_configured) {
+            var msg = "Matrix transport not configured";
+            warning (msg);
+            screenshot_send_failed (file_path, msg);
+            return false;
+        }
+
+        var time_str = capture_time.format ("%Y-%m-%d %H:%M:%S");
+        var body = "Screenshot %s".printf (time_str);
+        var filename = Path.get_basename (file_path);
+
+        // When E2EE is active, encrypt the attachment before upload
+        if (encryption != null && encryption.is_ready) {
+            return yield send_encrypted_screenshot (file_data, filename, body);
+        }
+
+        // No E2EE: upload plaintext (fallback)
+        var content_uri = yield upload_bytes (
+            new Bytes.take ((owned) file_data), "image/png", filename);
+        if (content_uri == null) {
+            screenshot_send_failed (file_path, "Media upload failed");
+            return false;
+        }
+
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("msgtype");
+        builder.add_string_value ("m.image");
+        builder.set_member_name ("body");
+        builder.add_string_value (body);
+        builder.set_member_name ("url");
+        builder.add_string_value (content_uri);
+        builder.set_member_name ("info");
+        builder.begin_object ();
+        builder.set_member_name ("mimetype");
+        builder.add_string_value ("image/png");
+        builder.end_object ();
+        builder.end_object ();
+
+        var gen = new Json.Generator ();
+        gen.set_root (builder.get_root ());
+        var content_json = gen.to_data (null);
+
+        var event_id = yield send_room_event ("m.room.message", content_json);
+        if (event_id == null) {
+            screenshot_send_failed (file_path, "Failed to send image event");
+            return false;
+        }
+
+        debug ("Matrix: sent screenshot %s as %s (unencrypted)", file_path, event_id);
+        screenshot_sent (file_path, event_id);
+        return true;
+    }
+
+    /**
      * Upload and send a screenshot to the Matrix room.
      *
      * When E2EE is enabled, the image is AES-256-CTR encrypted before
