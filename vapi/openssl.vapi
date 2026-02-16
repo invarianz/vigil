@@ -80,4 +80,18 @@ namespace OpenSSL {
                        out uint md_size,
                        Md type,
                        void* engine = null);
+
+    /* ───── Key Derivation (PBKDF2) ───── */
+
+    /**
+     * PBKDF2-HMAC key derivation.
+     * Returns 1 on success, 0 on failure.
+     */
+    [CCode (cname = "PKCS5_PBKDF2_HMAC")]
+    public int pbkdf2_hmac (string pass, int passlen,
+                            [CCode (array_length = false)] uint8[] salt, int saltlen,
+                            int iterations,
+                            Md digest,
+                            int keylen,
+                            [CCode (array_length = false)] uint8[] out_key);
 }

@@ -81,15 +81,30 @@ public class Vigil.Services.StorageService : Object {
 
     /**
      * Mark a screenshot as pending upload by creating a marker file.
+     *
+     * Computes a SHA-256 hash of the file at capture time so integrity
+     * can be verified before upload (detects post-capture tampering).
      */
     public void mark_pending (string screenshot_path) throws Error {
         var basename = Path.get_basename (screenshot_path);
         var marker_path = Path.build_filename (pending_dir, basename + ".pending");
         var marker = File.new_for_path (marker_path);
 
-        // Write the full path and timestamp to the marker
+        // Compute SHA-256 hash of the screenshot for integrity verification
+        string file_hash = "";
+        try {
+            uint8[] file_data;
+            FileUtils.get_data (screenshot_path, out file_data);
+            file_hash = Checksum.compute_for_data (ChecksumType.SHA256, file_data);
+        } catch (Error e) {
+            // File may not exist yet in tests; not fatal -- integrity
+            // check will treat empty hash as "no baseline" and accept.
+            debug ("Could not hash screenshot for integrity: %s", e.message);
+        }
+
+        // Write the full path, timestamp, and hash to the marker
         var now = new DateTime.now_local ();
-        var content = "%s\n%s\n".printf (screenshot_path, now.format_iso8601 ());
+        var content = "%s\n%s\n%s\n".printf (screenshot_path, now.format_iso8601 (), file_hash);
         marker.replace_contents (
             content.data,
             null,
@@ -101,6 +116,42 @@ public class Vigil.Services.StorageService : Object {
 
         if (pending_count >= 0) {
             pending_count++;
+        }
+    }
+
+    /**
+     * Verify a pending screenshot hasn't been tampered with since capture.
+     *
+     * Compares the current file hash with the hash stored at capture time.
+     *
+     * @param screenshot_path Path to the screenshot file.
+     * @return true if the file matches its capture-time hash.
+     */
+    public bool verify_screenshot_integrity (string screenshot_path) {
+        var basename = Path.get_basename (screenshot_path);
+        var marker_path = Path.build_filename (pending_dir, basename + ".pending");
+
+        try {
+            string marker_contents;
+            FileUtils.get_contents (marker_path, out marker_contents);
+            var lines = marker_contents.split ("\n");
+
+            // Need at least 3 lines: path, timestamp, hash
+            if (lines.length < 3 || lines[2].strip () == "") {
+                return true; // Legacy marker without hash -- accept
+            }
+
+            var stored_hash = lines[2].strip ();
+
+            // Compute current hash
+            uint8[] file_data;
+            FileUtils.get_data (screenshot_path, out file_data);
+            var current_hash = Checksum.compute_for_data (ChecksumType.SHA256, file_data);
+
+            return current_hash == stored_hash;
+        } catch (Error e) {
+            warning ("Failed to verify screenshot integrity: %s", e.message);
+            return false;
         }
     }
 

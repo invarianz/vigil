@@ -46,6 +46,12 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private GLib.Settings settings;
     private Vigil.Services.MatrixTransportService _matrix_svc;
 
+    private int _failed_unlock_attempts = 0;
+    private int64 _last_unlock_attempt_time = 0;
+    private const int PBKDF2_ITERATIONS = 600000;
+    private const int PBKDF2_SALT_LEN = 16;
+    private const int PBKDF2_KEY_LEN = 32;
+
     public SettingsView () {
         Object (
             orientation: Gtk.Orientation.VERTICAL,
@@ -316,6 +322,9 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         settings.set_string ("matrix-user-id", _matrix_svc.last_user_id);
         settings.set_string ("partner-matrix-id", partner_id);
         settings.set_string ("e2ee-pickle-key", e2ee_password);
+
+        // Also save token to secure file (crypto dir, 0600 permissions)
+        Vigil.Services.MatrixTransportService.save_access_token_to_file (token);
         set_status ("Creating encrypted room\u2026", false);
 
         // Step 3: Create encrypted room with partner
@@ -393,45 +402,159 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     }
 
     /**
-     * Hash an unlock code with SHA-256.
+     * Hash an unlock code with PBKDF2-SHA256 and a random salt.
+     *
+     * Uses 600K iterations to make offline brute-force impractical.
+     * Returns "hex(salt):hex(derived_key)" for storage.
      */
     private string hash_code (string code) {
-        return Checksum.compute_for_string (ChecksumType.SHA256, code);
+        uint8[] salt = new uint8[PBKDF2_SALT_LEN];
+        try {
+            var urandom = File.new_for_path ("/dev/urandom");
+            var stream = new DataInputStream (urandom.read (null));
+            size_t bytes_read;
+            stream.read_all (salt, out bytes_read, null);
+            stream.close (null);
+        } catch (Error e) {
+            warning ("Failed to generate salt: %s", e.message);
+            return Checksum.compute_for_string (ChecksumType.SHA256, code);
+        }
+
+        return hash_code_with_salt (code, salt);
+    }
+
+    private string hash_code_with_salt (string code, uint8[] salt) {
+        var derived = new uint8[PBKDF2_KEY_LEN];
+        var result = OpenSSL.pbkdf2_hmac (
+            code, code.length,
+            salt, salt.length,
+            PBKDF2_ITERATIONS,
+            OpenSSL.sha256 (),
+            PBKDF2_KEY_LEN,
+            derived
+        );
+
+        if (result != 1) {
+            warning ("PBKDF2 failed, falling back to SHA-256");
+            return Checksum.compute_for_string (ChecksumType.SHA256, code);
+        }
+
+        return "%s:%s".printf (bytes_to_hex (salt), bytes_to_hex (derived));
     }
 
     /**
-     * Lock settings and send the unlock code to the partner.
+     * Verify an unlock code against a stored hash.
+     *
+     * Supports both PBKDF2 format (salt:hash) and legacy SHA-256.
+     */
+    private bool verify_code (string code, string stored_hash) {
+        if (":" in stored_hash) {
+            var parts = stored_hash.split (":");
+            if (parts.length != 2) return false;
+            var salt = hex_to_bytes (parts[0]);
+            if (salt == null) return false;
+            var expected = hash_code_with_salt (code, salt);
+            return expected == stored_hash;
+        } else {
+            // Legacy SHA-256 format
+            return Checksum.compute_for_string (ChecksumType.SHA256, code) == stored_hash;
+        }
+    }
+
+    private static string bytes_to_hex (uint8[] data) {
+        var sb = new StringBuilder.sized (data.length * 2);
+        foreach (var b in data) {
+            sb.append_printf ("%02x", b);
+        }
+        return sb.str;
+    }
+
+    private static uint8[]? hex_to_bytes (string hex) {
+        if (hex.length % 2 != 0) return null;
+        var len = hex.length / 2;
+        var result = new uint8[len];
+        for (int i = 0; i < len; i++) {
+            int high = hex_char_val (hex[i * 2]);
+            int low = hex_char_val (hex[i * 2 + 1]);
+            if (high < 0 || low < 0) return null;
+            result[i] = (uint8) ((high << 4) | low);
+        }
+        return result;
+    }
+
+    private static int hex_char_val (char c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    }
+
+    /**
+     * Lock settings and display the unlock code.
+     *
+     * The code is NOT sent via Matrix (the monitored user can read the
+     * room). Instead, it is shown once in the UI for the user to share
+     * with their partner out-of-band (in person, phone, or another chat).
      */
     private async void lock_settings () {
         var code = generate_unlock_code ();
         settings.set_string ("unlock-code-hash", hash_code (code));
         settings.set_boolean ("settings-locked", true);
 
-        // Send the unlock code to the partner via Matrix
-        var message = (
-            "Settings are now locked. Unlock code: %s" +
-            " -- Keep this code. The user will need it from you" +
-            " to change any settings."
-        ).printf (code);
-        yield _matrix_svc.send_text_message (message);
+        // Notify the partner that settings are locked (code NOT included)
+        yield _matrix_svc.send_text_message (
+            "Settings are now locked. The unlock code has been shared " +
+            "with the user directly -- please ask them for it " +
+            "(in person, phone, or another chat)."
+        );
+
+        // Show the code in the UI (displayed once, not persisted anywhere)
+        set_status (
+            "Settings locked. Unlock code: %s\n".printf (code) +
+            "Share this code with your partner now (in person, phone, " +
+            "or another chat). It will not be shown again.",
+            true
+        );
 
         update_lock_ui ();
     }
 
     /**
      * Verify the entered unlock code and unlock settings if correct.
+     *
+     * Rate-limited: after 3 failed attempts, a 30-second cooldown is
+     * enforced. The counter is kept in memory so it cannot be reset
+     * by editing GSettings/dconf.
      */
     private void on_unlock_clicked () {
+        // Rate limiting: after 3 failures, require 30s cooldown
+        if (_failed_unlock_attempts >= 3) {
+            var now = GLib.get_monotonic_time ();
+            var elapsed_sec = (now - _last_unlock_attempt_time) / 1000000;
+            if (elapsed_sec < 30) {
+                var remaining = 30 - (int) elapsed_sec;
+                lock_status_label.label =
+                    "Too many failed attempts. Try again in %d seconds.".printf (remaining);
+                lock_status_label.add_css_class ("error");
+                return;
+            }
+            _failed_unlock_attempts = 0;
+        }
+
         var entered = unlock_entry.text.strip ().up ();
         var stored_hash = settings.get_string ("unlock-code-hash");
 
-        if (stored_hash == "" || hash_code (entered) != stored_hash) {
-            lock_status_label.label = "Incorrect unlock code. Ask your accountability partner for the code.";
+        if (stored_hash == "" || !verify_code (entered, stored_hash)) {
+            _failed_unlock_attempts++;
+            _last_unlock_attempt_time = GLib.get_monotonic_time ();
+            lock_status_label.label =
+                "Incorrect unlock code. Ask your accountability partner for the code.";
             lock_status_label.add_css_class ("error");
             return;
         }
 
         // Correct code -- send notification then unlock
+        _failed_unlock_attempts = 0;
         _matrix_svc.send_text_message.begin (
             "Settings unlocked (authorized by partner). Changes may follow."
         );

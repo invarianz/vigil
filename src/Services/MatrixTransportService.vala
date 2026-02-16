@@ -276,9 +276,47 @@ public class Vigil.Services.MatrixTransportService : Object {
             builder.add_string_value (partner_id);
             builder.end_array ();
 
-            // Enable encryption from the start
+            // Initial room state events
             builder.set_member_name ("initial_state");
             builder.begin_array ();
+
+            // Power levels: partner is admin (100), monitored user restricted (10).
+            // This prevents the monitored user from redacting screenshots,
+            // kicking the partner, or changing room state.
+            if (_last_user_id != "") {
+                builder.begin_object ();
+                builder.set_member_name ("type");
+                builder.add_string_value ("m.room.power_levels");
+                builder.set_member_name ("state_key");
+                builder.add_string_value ("");
+                builder.set_member_name ("content");
+                builder.begin_object ();
+                builder.set_member_name ("users");
+                builder.begin_object ();
+                builder.set_member_name (_last_user_id);
+                builder.add_int_value (10);
+                builder.set_member_name (partner_id);
+                builder.add_int_value (100);
+                builder.end_object (); // users
+                builder.set_member_name ("users_default");
+                builder.add_int_value (0);
+                builder.set_member_name ("events_default");
+                builder.add_int_value (10);
+                builder.set_member_name ("state_default");
+                builder.add_int_value (100);
+                builder.set_member_name ("redact");
+                builder.add_int_value (100);
+                builder.set_member_name ("ban");
+                builder.add_int_value (100);
+                builder.set_member_name ("kick");
+                builder.add_int_value (100);
+                builder.set_member_name ("invite");
+                builder.add_int_value (100);
+                builder.end_object (); // content
+                builder.end_object ();
+            }
+
+            // Enable encryption from the start
             builder.begin_object ();
             builder.set_member_name ("type");
             builder.add_string_value ("m.room.encryption");
@@ -951,6 +989,56 @@ public class Vigil.Services.MatrixTransportService : Object {
             return null;
         } catch (Error e) {
             warning ("Matrix whoami failed: %s", e.message);
+            return null;
+        }
+    }
+
+    /**
+     * Save an access token to a secure file in the crypto directory.
+     *
+     * The file is stored with 0600 permissions in a directory with 0700
+     * permissions, making it harder to discover than the dconf database.
+     */
+    public static void save_access_token_to_file (string token) {
+        var dir = Path.build_filename (
+            Environment.get_user_data_dir (),
+            "io.github.invarianz.vigil",
+            "crypto"
+        );
+        DirUtils.create_with_parents (dir, 0700);
+        FileUtils.chmod (dir, 0700);
+
+        var path = Path.build_filename (dir, "access_token");
+        try {
+            FileUtils.set_contents (path, token);
+            FileUtils.chmod (path, 0600);
+        } catch (Error e) {
+            warning ("Failed to save access token to file: %s", e.message);
+        }
+    }
+
+    /**
+     * Load an access token from the secure file, or return null.
+     */
+    public static string? load_access_token_from_file () {
+        var path = Path.build_filename (
+            Environment.get_user_data_dir (),
+            "io.github.invarianz.vigil",
+            "crypto",
+            "access_token"
+        );
+
+        if (!FileUtils.test (path, FileTest.EXISTS)) {
+            return null;
+        }
+
+        try {
+            string contents;
+            FileUtils.get_contents (path, out contents);
+            var stripped = contents.strip ();
+            return stripped != "" ? stripped : null;
+        } catch (Error e) {
+            warning ("Failed to read access token from file: %s", e.message);
             return null;
         }
     }

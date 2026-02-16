@@ -355,6 +355,16 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     /**
+     * Report a tamper event from an external source.
+     *
+     * Used by other services (e.g. DBusServer) to funnel tamper events
+     * through the same signal pipeline for immediate partner notification.
+     */
+    public void report_tamper (string event_type, string details) {
+        emit_tamper (event_type, details);
+    }
+
+    /**
      * Emit a tamper event for E2EE initialization failure.
      * Called by the daemon when E2EE was configured but failed to start.
      */

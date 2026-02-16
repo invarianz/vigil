@@ -354,6 +354,23 @@ public class Vigil.Daemon.DBusServer : Object {
     }
 
     private async void handle_capture () {
+        // Check disk space before capture (minimum 50 MB)
+        try {
+            var dir = File.new_for_path (_storage_svc.screenshots_dir);
+            var fs_info = dir.query_filesystem_info ("filesystem::free", null);
+            var free_bytes = fs_info.get_attribute_uint64 ("filesystem::free");
+
+            if (free_bytes < 50 * 1024 * 1024) {
+                var free_mb = (int64) (free_bytes / (1024 * 1024));
+                _tamper_svc.report_tamper ("disk_space_low",
+                    "Less than 50 MB disk space remaining (%lld MB free), ".printf (free_mb) +
+                    "screenshots cannot be stored");
+                return;
+            }
+        } catch (Error e) {
+            debug ("Could not check disk space: %s", e.message);
+        }
+
         var path = _storage_svc.generate_screenshot_path ();
         bool success = yield _screenshot_svc.take_screenshot (path);
 
@@ -390,6 +407,16 @@ public class Vigil.Daemon.DBusServer : Object {
         for (int i = 0; i < pending.length; i++) {
             var item = pending[i];
             var now = item.capture_time ?? new DateTime.now_local ();
+
+            // Verify screenshot integrity before upload
+            if (!_storage_svc.verify_screenshot_integrity (item.file_path)) {
+                _tamper_svc.report_tamper ("screenshot_tampered",
+                    "Screenshot file was modified after capture: %s".printf (
+                        Path.get_basename (item.file_path)));
+                // Discard tampered file -- do not upload compromised evidence
+                _storage_svc.mark_uploaded (item.file_path);
+                continue;
+            }
 
             if (_matrix_svc.is_configured) {
                 bool delivered = yield _matrix_svc.send_screenshot (item.file_path, now);

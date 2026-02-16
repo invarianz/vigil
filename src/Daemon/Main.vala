@@ -56,6 +56,13 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         var matrix_svc = new Vigil.Services.MatrixTransportService ();
         var enc_svc = new Vigil.Services.EncryptionService ();
 
+        // Prefer access token from secure file, fall back to GSettings
+        var file_token = Vigil.Services.MatrixTransportService.load_access_token_from_file ();
+        if (file_token != null) {
+            settings.set_string ("matrix-access-token", file_token);
+            debug ("Loaded access token from secure file");
+        }
+
         // Restore E2EE state if setup was completed
         var device_id = settings.get_string ("device-id");
         var user_id = settings.get_string ("matrix-user-id");
