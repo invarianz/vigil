@@ -53,7 +53,7 @@ public class Vigil.Services.SecurityUtils : Object {
         csprng_fill (buf);
         return ((uint32) buf[0] << 24) |
                ((uint32) buf[1] << 16) |
-               ((uint32) buf[2] << 8)  |
+               ((uint32) buf[2] << 8) |
                (uint32) buf[3];
     }
 
