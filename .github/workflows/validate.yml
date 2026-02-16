@@ -13,7 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install appstream
+        run: sudo apt-get update && sudo apt-get install -y appstream
+
       - name: Validate metainfo
-        uses: elementary/validate-metainfo@master
-        with:
-          path: data/vigil.metainfo.xml.in
+        run: appstreamcli validate data/vigil.metainfo.xml.in
