@@ -74,7 +74,8 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
         // Toast overlay for notifications
         toast = new Granite.Toast ("");
         var overlay = new Gtk.Overlay () {
-            child = view_stack
+            child = view_stack,
+            vexpand = true
         };
         overlay.add_overlay (toast);
 

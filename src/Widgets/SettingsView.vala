@@ -35,8 +35,8 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private Gtk.SpinButton retention_spin;
     private Gtk.Switch autostart_switch;
 
-    private Gtk.Grid setup_grid;
-    private Gtk.Grid advanced_grid;
+    private Gtk.Box setup_box;
+    private Gtk.Box advanced_box;
     private Gtk.Entry unlock_entry;
     private Gtk.Button unlock_button;
     private Gtk.Button lock_button;
@@ -53,17 +53,17 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private const int PBKDF2_KEY_LEN = 32;
 
     public SettingsView () {
-        Object (
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 24,
-            margin_top: 24,
-            margin_bottom: 24,
-            margin_start: 24,
-            margin_end: 24
-        );
+        Object ();
     }
 
     construct {
+        orientation = Gtk.Orientation.VERTICAL;
+        spacing = 24;
+        margin_top = 24;
+        margin_bottom = 24;
+        margin_start = 24;
+        margin_end = 24;
+
         settings = new GLib.Settings ("io.github.invarianz.vigil");
         _matrix_svc = new Vigil.Services.MatrixTransportService ();
 
@@ -94,13 +94,12 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         lock_button.add_css_class (Granite.STYLE_CLASS_SUGGESTED_ACTION);
         lock_button.clicked.connect (on_lock_clicked);
 
-        lock_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 8) {
-            margin_top = 8,
-            margin_bottom = 8,
+        lock_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 12) {
+            margin_top = 16,
+            margin_bottom = 16,
             margin_start = 16,
             margin_end = 16
         };
-        lock_box.add_css_class (Granite.STYLE_CLASS_CARD);
 
         var unlock_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
         unlock_row.append (unlock_entry);
@@ -167,100 +166,63 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             set_status ("Logged in (room not yet created)", false);
         }
 
-        setup_grid = new Gtk.Grid () {
-            row_spacing = 8,
-            column_spacing = 16,
-            margin_top = 8,
-            margin_bottom = 8,
+        setup_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 16) {
+            margin_top = 16,
+            margin_bottom = 16,
             margin_start = 16,
             margin_end = 16
         };
-        setup_grid.add_css_class (Granite.STYLE_CLASS_CARD);
 
-        var hs_label = new Gtk.Label ("Homeserver") { halign = Gtk.Align.START };
-        var user_label = new Gtk.Label ("Username") { halign = Gtk.Align.START };
-        var pw_label = new Gtk.Label ("Password") { halign = Gtk.Align.START };
-        var partner_label = new Gtk.Label ("Partner Matrix ID") { halign = Gtk.Align.START };
-        var e2ee_label = new Gtk.Label ("E2EE Password") { halign = Gtk.Align.START };
-
-        setup_grid.attach (hs_label, 0, 0);
-        setup_grid.attach (homeserver_entry, 1, 0);
-        setup_grid.attach (user_label, 0, 1);
-        setup_grid.attach (username_entry, 1, 1);
-        setup_grid.attach (pw_label, 0, 2);
-        setup_grid.attach (password_entry, 1, 2);
-        setup_grid.attach (partner_label, 0, 3);
-        setup_grid.attach (partner_entry, 1, 3);
-        setup_grid.attach (e2ee_label, 0, 4);
-        setup_grid.attach (e2ee_password_entry, 1, 4);
-        setup_grid.attach (setup_button, 1, 5);
-        setup_grid.attach (status_label, 0, 6, 2);
+        setup_box.append (create_form_row ("Homeserver", homeserver_entry));
+        setup_box.append (create_form_row ("Username", username_entry));
+        setup_box.append (create_form_row ("Password", password_entry));
+        setup_box.append (create_form_row ("Partner Matrix ID", partner_entry));
+        setup_box.append (create_form_row ("E2EE Password", e2ee_password_entry));
+        setup_box.append (setup_button);
+        setup_box.append (status_label);
 
         // --- Advanced section (collapsed) ---
         var advanced_header = new Granite.HeaderLabel ("Advanced");
 
-        var min_label = new Gtk.Label ("Minimum interval (seconds)") {
-            halign = Gtk.Align.START,
-            hexpand = true
-        };
         min_interval_spin = new Gtk.SpinButton.with_range (10, 120, 5);
         min_interval_spin.value = settings.get_int ("min-interval-seconds");
         min_interval_spin.value_changed.connect (() => {
             settings.set_int ("min-interval-seconds", (int) min_interval_spin.value);
         });
 
-        var max_label = new Gtk.Label ("Maximum interval (seconds)") {
-            halign = Gtk.Align.START,
-            hexpand = true
-        };
         max_interval_spin = new Gtk.SpinButton.with_range (30, 120, 5);
         max_interval_spin.value = settings.get_int ("max-interval-seconds");
         max_interval_spin.value_changed.connect (() => {
             settings.set_int ("max-interval-seconds", (int) max_interval_spin.value);
         });
 
-        var retention_label = new Gtk.Label ("Maximum local screenshots") {
-            halign = Gtk.Align.START,
-            hexpand = true
-        };
         retention_spin = new Gtk.SpinButton.with_range (10, 1000, 10);
         settings.bind ("max-local-screenshots", retention_spin, "value", SettingsBindFlags.DEFAULT);
 
-        var autostart_label = new Gtk.Label ("Start at login") {
-            halign = Gtk.Align.START,
-            hexpand = true
-        };
         autostart_switch = new Gtk.Switch () {
             valign = Gtk.Align.CENTER
         };
         settings.bind ("autostart-enabled", autostart_switch, "active", SettingsBindFlags.DEFAULT);
 
-        advanced_grid = new Gtk.Grid () {
-            row_spacing = 8,
-            column_spacing = 16,
-            margin_top = 8,
-            margin_bottom = 8,
+        advanced_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 16) {
+            margin_top = 16,
+            margin_bottom = 16,
             margin_start = 16,
             margin_end = 16
         };
-        advanced_grid.add_css_class (Granite.STYLE_CLASS_CARD);
 
-        advanced_grid.attach (min_label, 0, 0);
-        advanced_grid.attach (min_interval_spin, 1, 0);
-        advanced_grid.attach (max_label, 0, 1);
-        advanced_grid.attach (max_interval_spin, 1, 1);
-        advanced_grid.attach (retention_label, 0, 2);
-        advanced_grid.attach (retention_spin, 1, 2);
-        advanced_grid.attach (autostart_label, 0, 3);
-        advanced_grid.attach (autostart_switch, 1, 3);
+        advanced_box.append (create_form_row ("Minimum interval (seconds)", min_interval_spin));
+        advanced_box.append (create_form_row ("Maximum interval (seconds)", max_interval_spin));
+        advanced_box.append (create_form_row ("Maximum local screenshots", retention_spin));
+        advanced_box.append (create_form_row ("Start at login", autostart_switch));
 
         // Assemble the view
         append (lock_header);
         append (lock_box);
         append (setup_header);
-        append (setup_grid);
+        append (setup_box);
         append (advanced_header);
-        append (advanced_grid);
+        append (advanced_box);
 
         // Apply initial lock state
         update_lock_ui ();
@@ -602,8 +564,8 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         // If setup hasn't been done yet, don't show lock UI
         if (!setup_done) {
             lock_box.visible = false;
-            setup_grid.sensitive = true;
-            advanced_grid.sensitive = true;
+            setup_box.sensitive = true;
+            advanced_box.sensitive = true;
             return;
         }
 
@@ -617,17 +579,28 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             unlock_entry.visible = true;
             unlock_button.visible = true;
             lock_button.visible = false;
-            setup_grid.sensitive = false;
-            advanced_grid.sensitive = false;
+            setup_box.sensitive = false;
+            advanced_box.sensitive = false;
         } else {
             lock_status_label.label = "Settings are unlocked. Make your changes, then lock when done.";
             lock_status_label.remove_css_class ("error");
             unlock_entry.visible = false;
             unlock_button.visible = false;
             lock_button.visible = true;
-            setup_grid.sensitive = true;
-            advanced_grid.sensitive = true;
+            setup_box.sensitive = true;
+            advanced_box.sensitive = true;
         }
+    }
+
+    private static Gtk.Box create_form_row (string label_text, Gtk.Widget widget) {
+        var row = new Gtk.Box (Gtk.Orientation.VERTICAL, 4);
+        var label = new Gtk.Label (label_text) {
+            halign = Gtk.Align.START
+        };
+        label.add_css_class ("h4");
+        row.append (label);
+        row.append (widget);
+        return row;
     }
 
     private void set_status (string message, bool success) {
