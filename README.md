@@ -43,7 +43,8 @@ Your partner doesn't need any technical knowledge. They just watch for screensho
 - **Settings lock** -- after setup, settings are locked behind a code that only your partner knows
 - **Works on X11 and Wayland** -- dual screenshot backend for elementary OS 7 and 8
 - **Flatpak-ready** -- uses XDG Background portal for autostart; detects if permission is revoked
-- **Runs as a system service** -- keeps running even when the GUI is closed, restarts automatically if killed
+- **Runs as a system service** -- keeps running even when the GUI is closed, restarts automatically if killed (via systemd on native installs, or XDG Background portal in Flatpak)
+- **Local storage** -- screenshots are kept on disk at `~/.local/share/io.github.invarianz.vigil/screenshots/` so you can verify captures even without Matrix configured
 
 ## Getting started
 
@@ -143,10 +144,17 @@ These alerts fire when:
 | `e2ee_disabled` | Encryption keys were cleared |
 | `autostart_missing` | The autostart entry was deleted |
 | `autostart_modified` | The autostart entry was changed to point elsewhere |
+| `autostart_unreadable` | The autostart entry exists but cannot be read |
 | `systemd_disabled` | The system service was disabled |
 | `settings_unlocked` | The settings lock was bypassed |
 | `unlock_code_cleared` | The unlock code was erased while settings are locked |
+| `binary_missing` | The Vigil daemon binary was deleted |
 | `binary_modified` | The Vigil program file was replaced |
+| `binary_unreadable` | The Vigil daemon binary cannot be read |
+| `capture_stalled` | No screenshot captured within the expected interval (backend may have failed silently) |
+| `orphan_screenshots` | Many screenshots have no pending marker (markers may have been deleted to suppress upload) |
+| `disk_space_low` | Less than 50 MB disk space remaining; screenshots cannot be stored |
+| `screenshot_tampered` | A screenshot file was modified after capture (integrity hash mismatch) |
 | `e2ee_init_failed` | Encryption failed to start -- screenshots would be sent unencrypted, so monitoring is refused |
 | `background_permission_revoked` | Background running/autostart permission was revoked |
 
@@ -230,9 +238,11 @@ meson test -C build
 # Install
 sudo meson install -C build
 
-# Enable the daemon
+# Enable the daemon (native install)
 systemctl --user enable --now vigil-daemon.service
 ```
+
+When running as a Flatpak, the daemon uses the XDG Background portal instead of systemd. Autostart is requested automatically on first launch -- no manual service setup is needed.
 
 ## License
 
