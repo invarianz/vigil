@@ -60,6 +60,7 @@ public class Vigil.Daemon.DBusServer : Object {
     private int _cached_pending_count = 0;
     private uint _batch_upload_source = 0;
     private int _batch_upload_interval = 600;
+    private uint _background_portal_source = 0;
 
     /* D-Bus properties */
 
@@ -219,6 +220,10 @@ public class Vigil.Daemon.DBusServer : Object {
         _batch_upload_interval = _settings.get_int ("upload-batch-interval-seconds");
         yield flush_pending_uploads ();
         schedule_batch_upload ();
+
+        // Request background/autostart permission via XDG portal (Flatpak)
+        yield request_background_portal ();
+        schedule_background_portal_check ();
     }
 
     private void start_monitoring () {
@@ -465,6 +470,73 @@ public class Vigil.Daemon.DBusServer : Object {
         }
 
         refresh_pending_count ();
+    }
+
+    /**
+     * Request background/autostart permission via the XDG Background portal.
+     *
+     * On success, sets the GSettings flag so tamper detection can detect
+     * if it's later revoked. On denial (when previously granted), fires
+     * a tamper event. On error (portal unavailable, e.g. non-Flatpak),
+     * logs a debug message without triggering tamper.
+     */
+    private async void request_background_portal () {
+        try {
+            var portal = new Xdp.Portal ();
+
+            var commandline = new GenericArray<unowned string> ();
+            commandline.add ("io.github.invarianz.vigil.daemon");
+
+            bool granted = yield portal.request_background (
+                null,
+                "Vigil needs to run in the background to capture screenshots " +
+                "and send heartbeats to your accountability partner.",
+                commandline,
+                Xdp.BackgroundFlags.AUTOSTART,
+                null
+            );
+
+            if (granted) {
+                _settings.set_boolean ("background-portal-granted", true);
+                debug ("Background portal: autostart permission granted");
+            } else {
+                debug ("Background portal: permission denied");
+                if (_settings.get_boolean ("background-portal-granted")) {
+                    _settings.set_boolean ("background-portal-granted", false);
+                    _tamper_svc.emit_background_permission_revoked ();
+                }
+            }
+        } catch (Error e) {
+            // Portal unavailable (non-Flatpak environment) -- not a tamper event
+            debug ("Background portal unavailable: %s", e.message);
+        }
+    }
+
+    /**
+     * Schedule periodic re-checks of background portal permission.
+     * Uses the same jittered interval approach as tamper detection.
+     */
+    private void schedule_background_portal_check () {
+        int base_interval = _settings.get_int ("tamper-check-interval-seconds");
+        int min_val = base_interval * 3 / 4;
+        int max_val = base_interval * 5 / 4;
+
+        int interval;
+        if (min_val >= max_val) {
+            interval = base_interval;
+        } else {
+            int range = max_val - min_val;
+            uint32 rand_val = Vigil.Services.SecurityUtils.csprng_uint32 ();
+            interval = min_val + (int) (rand_val % (range + 1));
+        }
+
+        _background_portal_source = Timeout.add_seconds ((uint) interval, () => {
+            _background_portal_source = 0;
+            request_background_portal.begin (() => {
+                schedule_background_portal_check ();
+            });
+            return Source.REMOVE;
+        });
     }
 
     private void refresh_pending_count () {

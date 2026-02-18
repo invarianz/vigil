@@ -53,6 +53,9 @@ public class Vigil.Services.TamperDetectionService : Object {
     private GLib.Settings? _settings = null;
     private uint _timeout_source = 0;
 
+    /** Tracks whether the background portal flag was ever seen as true. */
+    private bool _background_portal_was_granted = false;
+
     /**
      * Create a TamperDetectionService.
      *
@@ -363,6 +366,14 @@ public class Vigil.Services.TamperDetectionService : Object {
                 "E2EE pickle key was cleared (encryption will not work)");
         }
 
+        // Check if background portal permission was revoked via dconf
+        bool bg_granted = _settings.get_boolean ("background-portal-granted");
+        if (bg_granted) {
+            _background_portal_was_granted = true;
+        } else if (_background_portal_was_granted) {
+            emit_background_permission_revoked ();
+        }
+
         // Check if settings lock was bypassed
         check_settings_lock ();
     }
@@ -447,7 +458,8 @@ public class Vigil.Services.TamperDetectionService : Object {
             "heartbeat-interval-seconds",
             "upload-batch-interval-seconds",
             "tamper-check-interval-seconds",
-            "partner-matrix-id"
+            "partner-matrix-id",
+            "background-portal-granted"
         };
 
         foreach (var key in critical_keys) {
@@ -478,6 +490,16 @@ public class Vigil.Services.TamperDetectionService : Object {
         emit_tamper ("e2ee_init_failed",
             "E2EE initialization failed at startup -- " +
             "monitoring will not send screenshots until encryption is restored");
+    }
+
+    /**
+     * Emit a tamper event for background portal permission revocation.
+     * Called by the daemon when the XDG Background portal denies autostart.
+     */
+    public void emit_background_permission_revoked () {
+        emit_tamper ("background_permission_revoked",
+            "Background portal autostart permission was revoked -- " +
+            "daemon will not auto-start at next login");
     }
 
     private void emit_tamper (string event_type, string details) {

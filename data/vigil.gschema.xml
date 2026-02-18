@@ -88,6 +88,10 @@
       <default>false</default>
       <summary>Start Vigil at login</summary>
     </key>
+    <key name="background-portal-granted" type="b">
+      <default>false</default>
+      <summary>Whether the XDG Background portal granted autostart permission</summary>
+    </key>
 
     <!-- Heartbeat -->
     <key name="heartbeat-interval-seconds" type="i">

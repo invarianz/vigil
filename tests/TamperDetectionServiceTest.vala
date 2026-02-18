@@ -551,6 +551,86 @@ void test_orphan_detection_no_alarm_when_few () {
     TestUtils.delete_directory_recursive (dir);
 }
 
+void test_background_portal_flag_cleared_detected () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    // Simulate: portal previously granted permission
+    settings.set_boolean ("background-portal-granted", true);
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    // First check: establishes that the flag was true
+    svc.check_settings_sanity ();
+
+    // Now clear the flag (simulating revocation via dconf)
+    settings.set_boolean ("background-portal-granted", false);
+
+    GenericArray<string> events = new GenericArray<string> ();
+    svc.tamper_detected.connect ((t, d) => {
+        events.add (t);
+    });
+
+    svc.check_settings_sanity ();
+
+    bool found = false;
+    for (int i = 0; i < events.length; i++) {
+        if (events[i] == "background_permission_revoked") found = true;
+    }
+    assert_true (found);
+
+    // Cleanup
+    settings.set_boolean ("background-portal-granted", false);
+}
+
+void test_background_portal_flag_not_set_no_tamper () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    // Default: background-portal-granted is false (never granted)
+    settings.set_boolean ("background-portal-granted", false);
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    GenericArray<string> events = new GenericArray<string> ();
+    svc.tamper_detected.connect ((t, d) => {
+        events.add (t);
+    });
+
+    svc.check_settings_sanity ();
+
+    bool found = false;
+    for (int i = 0; i < events.length; i++) {
+        if (events[i] == "background_permission_revoked") found = true;
+    }
+    assert_false (found);
+}
+
+void test_emit_background_permission_revoked () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    string? event_details = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+        event_details = d;
+    });
+
+    svc.emit_background_permission_revoked ();
+    assert_true (event_type == "background_permission_revoked");
+    assert_true (event_details.contains ("auto-start"));
+}
+
 void test_stop_cleans_up_urandom () {
     var svc = new Vigil.Services.TamperDetectionService (null);
     svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
@@ -597,6 +677,12 @@ public static int main (string[] args) {
         test_orphan_detection_with_many_orphans);
     Test.add_func ("/tamper/orphan_detection_few_no_alarm",
         test_orphan_detection_no_alarm_when_few);
+    Test.add_func ("/tamper/background_portal_flag_cleared",
+        test_background_portal_flag_cleared_detected);
+    Test.add_func ("/tamper/background_portal_flag_not_set",
+        test_background_portal_flag_not_set_no_tamper);
+    Test.add_func ("/tamper/background_permission_revoked_event",
+        test_emit_background_permission_revoked);
     Test.add_func ("/tamper/stop_cleans_up_urandom", test_stop_cleans_up_urandom);
 
     return Test.run ();

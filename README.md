@@ -42,6 +42,7 @@ Your partner doesn't need any technical knowledge. They just watch for screensho
 - **Offline resilience** -- queues screenshots for delivery when offline, retries on reconnect
 - **Settings lock** -- after setup, settings are locked behind a code that only your partner knows
 - **Works on X11 and Wayland** -- dual screenshot backend for elementary OS 7 and 8
+- **Flatpak-ready** -- uses XDG Background portal for autostart; detects if permission is revoked
 - **Runs as a system service** -- keeps running even when the GUI is closed, restarts automatically if killed
 
 ## Getting started
@@ -147,6 +148,7 @@ These alerts fire when:
 | `unlock_code_cleared` | The unlock code was erased while settings are locked |
 | `binary_modified` | The Vigil program file was replaced |
 | `e2ee_init_failed` | Encryption failed to start -- screenshots would be sent unencrypted, so monitoring is refused |
+| `background_permission_revoked` | Background running/autostart permission was revoked |
 
 ### Forced kill or uninstall
 
