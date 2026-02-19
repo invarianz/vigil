@@ -81,6 +81,9 @@ public class Vigil.Services.HeartbeatService : Object {
     /** Monotonically increasing heartbeat sequence number. */
     public int64 sequence_number { get; private set; default = 0; }
 
+    /** Lifetime capture counter from StorageService. */
+    public int64 lifetime_captures { get; set; default = 0; }
+
     /** List of tamper events since last heartbeat. */
     private GenericArray<string> _tamper_events;
 
@@ -197,8 +200,8 @@ public class Vigil.Services.HeartbeatService : Object {
         var minutes = (uptime % 3600) / 60;
 
         var sb = new StringBuilder ();
-        sb.append ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d | seq: %lld".printf (
-            hours, minutes, screenshots_since_last, pending_upload_count, sequence_number
+        sb.append ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d | seq: %lld | lifetime: %lld".printf (
+            hours, minutes, screenshots_since_last, pending_upload_count, sequence_number, lifetime_captures
         ));
 
         // Detect gap (sleep/wake or network outage recovery)

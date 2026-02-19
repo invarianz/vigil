@@ -398,6 +398,131 @@ void test_storage_hmac_key_derivation () {
     assert_true (key1.length == 64);
 }
 
+void test_lifetime_counter_increments () {
+    setup_test_dir ();
+
+    var service = create_test_service ();
+    try {
+        service.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    var path1 = Path.build_filename (service.screenshots_dir, "lc1.png");
+    var path2 = Path.build_filename (service.screenshots_dir, "lc2.png");
+    var path3 = Path.build_filename (service.screenshots_dir, "lc3.png");
+
+    try {
+        service.mark_pending (path1);
+        service.mark_pending (path2);
+        service.mark_pending (path3);
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    assert_true (service.lifetime_captures == 3);
+
+    teardown_test_dir ();
+}
+
+void test_lifetime_counter_persists () {
+    setup_test_dir ();
+
+    var service = create_test_service ();
+    service.hmac_key = "test-persist-key";
+    try {
+        service.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    var path1 = Path.build_filename (service.screenshots_dir, "lp1.png");
+    var path2 = Path.build_filename (service.screenshots_dir, "lp2.png");
+
+    try {
+        service.mark_pending (path1);
+        service.mark_pending (path2);
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    // Create a new service instance with the same base_dir
+    var service2 = new Vigil.Services.StorageService (test_base_dir);
+    service2.hmac_key = "test-persist-key";
+    try {
+        service2.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    assert_true (service2.lifetime_captures == 2);
+    assert_false (service2.capture_counter_tampered);
+
+    teardown_test_dir ();
+}
+
+void test_lifetime_counter_tamper_detected () {
+    setup_test_dir ();
+
+    var service = create_test_service ();
+    service.hmac_key = "test-tamper-key";
+    try {
+        service.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    var path1 = Path.build_filename (service.screenshots_dir, "lt1.png");
+    try {
+        service.mark_pending (path1);
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    // Tamper with the counter file: change the count
+    var counter_path = Path.build_filename (test_base_dir, "capture_counter");
+    try {
+        string contents;
+        FileUtils.get_contents (counter_path, out contents);
+        var lines = contents.split ("\n");
+        // Change count but keep old HMAC
+        lines[0] = "999";
+        FileUtils.set_contents (counter_path, string.joinv ("\n", lines));
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    // New service should detect tamper
+    var service2 = new Vigil.Services.StorageService (test_base_dir);
+    service2.hmac_key = "test-tamper-key";
+    try {
+        service2.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    assert_true (service2.capture_counter_tampered);
+
+    teardown_test_dir ();
+}
+
+void test_lifetime_counter_no_tamper_fresh_install () {
+    setup_test_dir ();
+
+    var service = create_test_service ();
+    service.hmac_key = "test-fresh-key";
+    try {
+        service.initialize ();
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    assert_false (service.capture_counter_tampered);
+    assert_true (service.lifetime_captures == 0);
+
+    teardown_test_dir ();
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -416,6 +541,10 @@ public static int main (string[] args) {
     Test.add_func ("/storage/path_validation_rejects_outside", test_storage_path_validation_rejects_outside);
     Test.add_func ("/storage/pickle_key_roundtrip", test_storage_pickle_key_file_roundtrip);
     Test.add_func ("/storage/hmac_key_derivation", test_storage_hmac_key_derivation);
+    Test.add_func ("/storage/lifetime_counter_increments", test_lifetime_counter_increments);
+    Test.add_func ("/storage/lifetime_counter_persists", test_lifetime_counter_persists);
+    Test.add_func ("/storage/lifetime_counter_tamper_detected", test_lifetime_counter_tamper_detected);
+    Test.add_func ("/storage/lifetime_counter_no_tamper_fresh", test_lifetime_counter_no_tamper_fresh_install);
 
     return Test.run ();
 }

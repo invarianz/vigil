@@ -29,6 +29,12 @@ public class Vigil.Services.StorageService : Object {
     /** Cached count of pending screenshots. Use instead of scanning the directory. */
     public int pending_count { get; private set; default = -1; }
 
+    /** Lifetime capture counter (monotonically increasing, persisted to disk). */
+    public int64 lifetime_captures { get; private set; default = 0; }
+
+    /** Whether the capture counter file failed HMAC verification on load. */
+    public bool capture_counter_tampered { get; private set; default = false; }
+
     /**
      * HMAC key for marker file integrity.
      *
@@ -72,6 +78,8 @@ public class Vigil.Services.StorageService : Object {
             // Screenshots may contain sensitive content -- restrict access
             SecurityUtils.ensure_secure_directory (dir_path);
         }
+
+        load_capture_counter ();
     }
 
     /**
@@ -139,13 +147,7 @@ public class Vigil.Services.StorageService : Object {
         // to authenticate the marker content (prevents hash substitution).
         var now = new DateTime.now_local ();
         var core_content = "%s\n%s\n%s".printf (screenshot_path, now.format_iso8601 (), file_hash);
-        string content;
-        if (hmac_key != "") {
-            var hmac = compute_hmac (core_content);
-            content = "%s\n%s\n".printf (core_content, hmac);
-        } else {
-            content = "%s\n".printf (core_content);
-        }
+        var content = build_hmac_content (core_content);
         marker.replace_contents (
             content.data,
             null,
@@ -158,25 +160,9 @@ public class Vigil.Services.StorageService : Object {
         if (pending_count >= 0) {
             pending_count++;
         }
-    }
 
-    /**
-     * Verify a pending screenshot hasn't been tampered with since capture.
-     *
-     * Compares the current file hash with the hash stored at capture time.
-     *
-     * @param screenshot_path Path to the screenshot file.
-     * @return true if the file matches its capture-time hash.
-     */
-    public bool verify_screenshot_integrity (string screenshot_path) {
-        try {
-            uint8[] file_data;
-            FileUtils.get_data (screenshot_path, out file_data);
-            return verify_screenshot_integrity_from_data (screenshot_path, file_data);
-        } catch (Error e) {
-            warning ("Failed to verify screenshot integrity: %s", e.message);
-            return false;
-        }
+        lifetime_captures++;
+        persist_capture_counter ();
     }
 
     /**
@@ -403,6 +389,75 @@ public class Vigil.Services.StorageService : Object {
         }
         return deleted;
     }
+    /**
+     * Load the lifetime capture counter from disk.
+     *
+     * File format: two lines -- "{count}\n{hmac}\n".
+     * If the file doesn't exist (fresh install), starts at 0 with no tamper.
+     * If the HMAC is invalid, sets capture_counter_tampered but still loads
+     * the count so the counter continues from where it was.
+     */
+    private void load_capture_counter () {
+        var path = Path.build_filename (_base_dir, "capture_counter");
+
+        if (!FileUtils.test (path, FileTest.EXISTS)) {
+            return;
+        }
+
+        try {
+            string contents;
+            FileUtils.get_contents (path, out contents);
+            var lines = contents.split ("\n");
+
+            if (lines.length >= 1 && lines[0].strip () != "") {
+                lifetime_captures = int64.parse (lines[0].strip ());
+            }
+
+            // Verify HMAC if key is set and file has an HMAC line
+            if (hmac_key != "" && lines.length >= 2 && lines[1].strip () != "") {
+                var expected_hmac = compute_hmac (lines[0].strip ());
+                var stored_hmac = lines[1].strip ();
+                if (expected_hmac != stored_hmac) {
+                    capture_counter_tampered = true;
+                }
+            }
+        } catch (Error e) {
+            warning ("Failed to load capture counter: %s", e.message);
+        }
+    }
+
+    /**
+     * Persist the lifetime capture counter to disk.
+     *
+     * Writes "{count}\n{hmac}\n" if an HMAC key is set, or just
+     * "{count}\n" otherwise. Uses FileUtils.set_contents() which
+     * does atomic write-to-temp-then-rename.
+     */
+    private void persist_capture_counter () {
+        var path = Path.build_filename (_base_dir, "capture_counter");
+        var count_str = lifetime_captures.to_string ();
+        var content = build_hmac_content (count_str);
+
+        try {
+            FileUtils.set_contents (path, content);
+            FileUtils.chmod (path, 0600);
+        } catch (Error e) {
+            warning ("Failed to persist capture counter: %s", e.message);
+        }
+    }
+
+    /**
+     * Build content string with optional HMAC line appended.
+     *
+     * Returns "{data}\n{hmac}\n" if HMAC key is set, or "{data}\n" otherwise.
+     */
+    private string build_hmac_content (string data) {
+        if (hmac_key != "") {
+            return "%s\n%s\n".printf (data, compute_hmac (data));
+        }
+        return "%s\n".printf (data);
+    }
+
     /**
      * Compute HMAC-SHA256 of the given data using the stored HMAC key.
      *

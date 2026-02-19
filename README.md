@@ -155,6 +155,7 @@ These alerts fire when:
 | `orphan_screenshots` | Many screenshots have no pending marker (markers may have been deleted to suppress upload) |
 | `disk_space_low` | Less than 50 MB disk space remaining; screenshots cannot be stored |
 | `screenshot_tampered` | A screenshot file was modified after capture (integrity hash mismatch) |
+| `capture_counter_tampered` | The lifetime capture counter file was modified (HMAC mismatch) |
 | `e2ee_init_failed` | Encryption failed to start -- screenshots would be sent unencrypted, so monitoring is refused |
 | `background_permission_revoked` | Background running/autostart permission was revoked |
 

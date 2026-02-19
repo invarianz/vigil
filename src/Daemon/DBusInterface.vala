@@ -197,6 +197,13 @@ public class Vigil.Daemon.DBusServer : Object {
             warning ("Failed to initialize storage: %s", e.message);
         }
 
+        if (_storage_svc.capture_counter_tampered) {
+            _tamper_svc.report_tamper ("capture_counter_tampered",
+                "Capture counter file HMAC is invalid (file was modified)");
+        }
+
+        _heartbeat_svc.lifetime_captures = _storage_svc.lifetime_captures;
+
         yield _screenshot_svc.initialize ();
 
         apply_settings ();
@@ -247,6 +254,7 @@ public class Vigil.Daemon.DBusServer : Object {
 
         _screenshot_svc.screenshot_taken.connect ((path) => {
             _heartbeat_svc.screenshots_since_last++;
+            _heartbeat_svc.lifetime_captures = _storage_svc.lifetime_captures;
             _tamper_svc.report_capture_success ();
             screenshot_captured (path);
             status_changed ();
