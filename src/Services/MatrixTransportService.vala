@@ -449,7 +449,7 @@ public class Vigil.Services.MatrixTransportService : Object {
      * @param user_id The user whose devices to query.
      * @return JSON response string, or null on failure.
      */
-    public async string? query_device_keys (string user_id) {
+    private async string? query_device_keys (string user_id) {
         if (homeserver_url == "" || access_token == "") {
             return null;
         }
@@ -507,7 +507,7 @@ public class Vigil.Services.MatrixTransportService : Object {
      * @param device_ids Array of device IDs to claim keys for.
      * @return JSON response string, or null on failure.
      */
-    public async string? claim_one_time_keys (string user_id, string[] device_ids) {
+    private async string? claim_one_time_keys (string user_id, string[] device_ids) {
         if (homeserver_url == "" || access_token == "") {
             return null;
         }

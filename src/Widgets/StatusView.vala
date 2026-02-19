@@ -104,8 +104,18 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
         };
         info_card.append (create_info_row ("Pending uploads", pending_uploads_label));
 
+        var icon = new Gtk.Image.from_icon_name ("io.github.invarianz.vigil") {
+            pixel_size = 128,
+            opacity = 0.15,
+            vexpand = true,
+            valign = Gtk.Align.END,
+            halign = Gtk.Align.CENTER,
+            margin_bottom = 24
+        };
+
         append (header_box);
         append (info_card);
+        append (icon);
     }
 
     public void set_monitoring_active (bool active) {
@@ -136,9 +146,9 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
     public void set_pending_count (int count) {
         pending_uploads_label.label = count.to_string ();
         if (count > 10) {
-            pending_uploads_label.add_css_class (Granite.STYLE_CLASS_WARNING);
+            pending_uploads_label.add_css_class (Granite.CssClass.WARNING);
         } else {
-            pending_uploads_label.remove_css_class (Granite.STYLE_CLASS_WARNING);
+            pending_uploads_label.remove_css_class (Granite.CssClass.WARNING);
         }
     }
 

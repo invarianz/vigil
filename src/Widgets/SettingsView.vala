@@ -42,6 +42,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private Gtk.Button lock_button;
     private Gtk.Label lock_status_label;
     private Gtk.Box lock_box;
+    private Granite.HeaderLabel lock_header;
 
     private GLib.Settings settings;
     private Vigil.Services.MatrixTransportService _matrix_svc;
@@ -73,7 +74,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         _matrix_svc.room_id = settings.get_string ("matrix-room-id");
 
         // --- Settings lock section ---
-        var lock_header = new Granite.HeaderLabel ("Settings Lock");
+        lock_header = new Granite.HeaderLabel ("Settings Lock");
 
         lock_status_label = new Gtk.Label ("") {
             halign = Gtk.Align.START,
@@ -87,11 +88,11 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         };
 
         unlock_button = new Gtk.Button.with_label ("Unlock");
-        unlock_button.add_css_class (Granite.STYLE_CLASS_DESTRUCTIVE_ACTION);
+        unlock_button.add_css_class (Granite.CssClass.DESTRUCTIVE);
         unlock_button.clicked.connect (on_unlock_clicked);
 
         lock_button = new Gtk.Button.with_label ("Lock Settings");
-        lock_button.add_css_class (Granite.STYLE_CLASS_SUGGESTED_ACTION);
+        lock_button.add_css_class (Granite.CssClass.SUGGESTED);
         lock_button.clicked.connect (on_lock_clicked);
 
         lock_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 12) {
@@ -148,7 +149,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         setup_button = new Gtk.Button.with_label ("Setup") {
             halign = Gtk.Align.END
         };
-        setup_button.add_css_class (Granite.STYLE_CLASS_SUGGESTED_ACTION);
+        setup_button.add_css_class (Granite.CssClass.SUGGESTED);
         setup_button.clicked.connect (on_setup_clicked);
 
         status_label = new Gtk.Label ("") {
@@ -563,12 +564,14 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
 
         // If setup hasn't been done yet, don't show lock UI
         if (!setup_done) {
+            lock_header.visible = false;
             lock_box.visible = false;
             setup_box.sensitive = true;
             advanced_box.sensitive = true;
             return;
         }
 
+        lock_header.visible = true;
         lock_box.visible = true;
 
         if (locked) {

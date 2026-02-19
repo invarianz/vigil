@@ -20,7 +20,6 @@ granite_dep = dependency('granite-7', version: '>= 7.0')
 json_dep = dependency('json-glib-1.0')
 soup_dep = dependency('libsoup-3.0', version: '>= 3.0')
 portal_dep = dependency('libportal', version: '>= 0.6')
-portal_gtk4_dep = dependency('libportal-gtk4', version: '>= 0.6')
 olm_dep = dependency('olm', version: '>= 3.0')
 openssl_dep = dependency('openssl', version: '>= 1.1.0')
 
@@ -73,7 +72,6 @@ all_dependencies = [
     json_dep,
     soup_dep,
     portal_dep,
-    portal_gtk4_dep,
     olm_dep,
     openssl_dep,
 ]
