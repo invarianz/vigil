@@ -17,7 +17,7 @@ public class Vigil.Application : Gtk.Application {
     public Application () {
         Object (
             application_id: "io.github.invarianz.vigil",
-            flags: ApplicationFlags.FLAGS_NONE
+            flags: ApplicationFlags.DEFAULT_FLAGS
         );
     }
 

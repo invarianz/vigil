@@ -161,29 +161,24 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
             return;
         }
 
-        try {
-            status_view.set_monitoring_active (_daemon.monitoring_active);
-            status_view.set_backend_name (_daemon.active_backend_name);
-            status_view.set_pending_count (_daemon.pending_upload_count);
+        status_view.set_monitoring_active (_daemon.monitoring_active);
+        status_view.set_backend_name (_daemon.active_backend_name);
+        status_view.set_pending_count (_daemon.pending_upload_count);
 
-            var next_iso = _daemon.next_capture_time_iso;
-            if (next_iso != "") {
-                var next = new DateTime.from_iso8601 (next_iso, new TimeZone.local ());
-                status_view.set_next_capture_time (next);
-            } else {
-                status_view.set_next_capture_time (null);
-            }
+        var next_iso = _daemon.next_capture_time_iso;
+        if (next_iso != "") {
+            var next = new DateTime.from_iso8601 (next_iso, new TimeZone.local ());
+            status_view.set_next_capture_time (next);
+        } else {
+            status_view.set_next_capture_time (null);
+        }
 
-            var last_iso = _daemon.last_capture_time_iso;
-            if (last_iso != "") {
-                var last = new DateTime.from_iso8601 (last_iso, new TimeZone.local ());
-                status_view.set_last_capture_time (last);
-            } else {
-                status_view.set_last_capture_time (null);
-            }
-        } catch (Error e) {
-            debug ("Failed to refresh status from daemon: %s", e.message);
-            show_daemon_disconnected ();
+        var last_iso = _daemon.last_capture_time_iso;
+        if (last_iso != "") {
+            var last = new DateTime.from_iso8601 (last_iso, new TimeZone.local ());
+            status_view.set_last_capture_time (last);
+        } else {
+            status_view.set_last_capture_time (null);
         }
     }
 
