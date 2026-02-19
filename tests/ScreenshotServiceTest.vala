@@ -80,18 +80,29 @@ void test_screenshot_service_no_backend_emits_failure () {
 
 void test_screenshot_service_initialize () {
     // Initialize should either find a backend (graphical session)
-    // or gracefully find none (headless/CI) without crashing
+    // or gracefully find none (headless/CI) without crashing.
     var loop = new MainLoop ();
     var service = new Vigil.Services.ScreenshotService ();
+
+    // In headless environments (CI containers), no backend will be found
+    // and initialize() emits a g_warning. GTest treats warnings as fatal,
+    // so we must expect it to prevent the test from aborting.
+    var display = Environment.get_variable ("DISPLAY");
+    var wayland = Environment.get_variable ("WAYLAND_DISPLAY");
+    bool headless = (display == null || display == "") &&
+                    (wayland == null || wayland == "");
+
+    if (headless) {
+        Test.expect_message (null, LogLevelFlags.LEVEL_WARNING,
+            "*No screenshot backend*");
+    }
 
     service.initialize.begin ((obj, res) => {
         service.initialize.end (res);
 
         if (service.active_backend_name == null) {
-            // Headless: no backend found, that's fine
             debug ("No backend found (headless environment)");
         } else {
-            // Graphical: a backend was selected
             debug ("Backend found: %s", service.active_backend_name);
         }
 
@@ -104,6 +115,10 @@ void test_screenshot_service_initialize () {
     });
 
     loop.run ();
+
+    if (headless) {
+        Test.assert_expected_messages ();
+    }
 }
 
 void test_mock_backend_interface () {
