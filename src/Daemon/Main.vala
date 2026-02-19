@@ -25,6 +25,7 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
     private Vigil.Services.HeartbeatService _heartbeat_svc;
     private Vigil.Services.TamperDetectionService _tamper_svc;
     private uint _watchdog_source = 0;
+    private GenericArray<string> _deferred_tamper_events;
 
     public DaemonApp () {
         Object (
@@ -42,6 +43,9 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
 
     protected override void startup () {
         base.startup ();
+
+        // Harden process before anything else: disable ptrace, detect LD_PRELOAD
+        _deferred_tamper_events = Vigil.Services.SecurityUtils.harden_process ();
 
         // Hold the application so it doesn't exit (it's a service)
         hold ();
@@ -108,6 +112,14 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
 
         _heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
         _tamper_svc = new Vigil.Services.TamperDetectionService (settings);
+
+        // Drain deferred tamper events collected before services existed
+        for (int i = 0; i < _deferred_tamper_events.length; i++) {
+            var parts = _deferred_tamper_events[i].split (":", 2);
+            if (parts.length == 2) {
+                _tamper_svc.report_tamper (parts[0], parts[1]);
+            }
+        }
 
         // If E2EE was configured but failed to initialize, fire a tamper
         // alert so the partner knows encryption is broken. This is more

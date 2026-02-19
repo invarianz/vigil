@@ -56,6 +56,15 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Tracks whether the background portal flag was ever seen as true. */
     private bool _background_portal_was_granted = false;
 
+    /** Paths that the daemon itself is about to delete (expected, not tamper). */
+    private GenericSet<string> _expected_deletions;
+
+    /** Active GIO file monitors for inotify watches. */
+    private GenericArray<FileMonitor> _monitors;
+
+    /** Whether file monitoring is active. */
+    private bool _file_monitoring_active = false;
+
     /**
      * Create a TamperDetectionService.
      *
@@ -64,6 +73,8 @@ public class Vigil.Services.TamperDetectionService : Object {
      */
     public TamperDetectionService (GLib.Settings? settings = null) {
         _settings = settings;
+        _expected_deletions = new GenericSet<string> (str_hash, str_equal);
+        _monitors = new GenericArray<FileMonitor> ();
 
         if (_settings != null) {
             connect_settings_signals ();
@@ -94,12 +105,14 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     /**
-     * Stop the detection loop.
+     * Stop the detection loop and file monitoring.
      */
     public void stop () {
         if (!is_running) {
             return;
         }
+
+        stop_file_monitoring ();
 
         if (_timeout_source != 0) {
             Source.remove (_timeout_source);
@@ -473,6 +486,60 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     /**
+     * Register a path as an expected deletion (called before the daemon's own deletes).
+     *
+     * The file monitor will ignore DELETE events for registered paths.
+     */
+    public void expect_deletion (string path) {
+        _expected_deletions.add (path.dup ());
+    }
+
+    /**
+     * Start inotify watches on critical directories.
+     *
+     * Monitors screenshots_dir and pending_dir for unexpected deletions,
+     * and the crypto directory for any modifications.
+     */
+    public void start_file_monitoring () {
+        if (_file_monitoring_active) {
+            return;
+        }
+
+        _file_monitoring_active = true;
+
+        // Watch screenshots directory
+        if (screenshots_dir != "") {
+            watch_directory (screenshots_dir, "screenshot");
+        }
+
+        // Watch pending markers directory
+        if (pending_dir != "") {
+            watch_directory (pending_dir, "marker");
+        }
+
+        // Watch crypto directory
+        var crypto_dir = SecurityUtils.get_crypto_dir ();
+        if (FileUtils.test (crypto_dir, FileTest.IS_DIR)) {
+            watch_directory (crypto_dir, "crypto");
+        }
+    }
+
+    /**
+     * Stop all file monitors.
+     */
+    public void stop_file_monitoring () {
+        if (!_file_monitoring_active) {
+            return;
+        }
+
+        for (int i = 0; i < _monitors.length; i++) {
+            _monitors[i].cancel ();
+        }
+        _monitors.remove_range (0, _monitors.length);
+        _file_monitoring_active = false;
+    }
+
+    /**
      * Report a tamper event from an external source.
      *
      * Used by other services (e.g. DBusServer) to funnel tamper events
@@ -500,6 +567,75 @@ public class Vigil.Services.TamperDetectionService : Object {
         emit_tamper ("background_permission_revoked",
             "Background portal autostart permission was revoked -- " +
             "daemon will not auto-start at next login");
+    }
+
+    /**
+     * Set up a GIO FileMonitor on a directory with the given category tag.
+     */
+    private void watch_directory (string dir_path, string category) {
+        try {
+            var dir = File.new_for_path (dir_path);
+            if (!dir.query_exists ()) {
+                return;
+            }
+
+            var monitor = dir.monitor_directory (FileMonitorFlags.NONE, null);
+            monitor.changed.connect ((file, other, event) => {
+                handle_monitor_event (file, event, category);
+            });
+            _monitors.add (monitor);
+            debug ("File monitor started on %s (%s)", dir_path, category);
+        } catch (Error e) {
+            debug ("Could not watch %s: %s", dir_path, e.message);
+        }
+    }
+
+    /**
+     * Handle a file monitor event. Fires tamper events for unexpected changes.
+     */
+    private void handle_monitor_event (File file, FileMonitorEvent event, string category) {
+        if (event != FileMonitorEvent.DELETED &&
+            event != FileMonitorEvent.CHANGED) {
+            return;
+        }
+
+        var path = file.get_path ();
+        if (path == null) {
+            return;
+        }
+
+        // Crypto directory: any change or deletion is suspicious
+        if (category == "crypto") {
+            if (event == FileMonitorEvent.CHANGED || event == FileMonitorEvent.DELETED) {
+                emit_tamper ("crypto_file_tampered",
+                    "Crypto file %s was %s".printf (
+                        Path.get_basename (path),
+                        event == FileMonitorEvent.DELETED ? "deleted" : "modified"));
+            }
+            return;
+        }
+
+        // For screenshots and markers, only care about deletions
+        if (event != FileMonitorEvent.DELETED) {
+            return;
+        }
+
+        // Check if this was an expected deletion (O(1) hash lookup)
+        if (_expected_deletions.contains (path)) {
+            _expected_deletions.remove (path);
+            return;
+        }
+
+        // Unexpected deletion -- fire tamper event
+        if (category == "screenshot") {
+            emit_tamper ("screenshot_deleted",
+                "Screenshot file unexpectedly deleted: %s".printf (
+                    Path.get_basename (path)));
+        } else if (category == "marker") {
+            emit_tamper ("marker_deleted",
+                "Pending marker unexpectedly deleted: %s".printf (
+                    Path.get_basename (path)));
+        }
     }
 
     private void emit_tamper (string event_type, string details) {

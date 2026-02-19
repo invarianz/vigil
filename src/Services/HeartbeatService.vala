@@ -78,17 +78,24 @@ public class Vigil.Services.HeartbeatService : Object {
     /** Data directory for persisting unsent alerts. */
     public string data_dir { get; set; default = ""; }
 
+    /** Environment attestation string, sent in the first heartbeat only. */
+    public string environment_attestation { get; set; default = ""; }
+
     /** Monotonically increasing heartbeat sequence number. */
-    public int64 sequence_number { get; private set; default = 0; }
+    public int64 sequence_number { get; set; default = 0; }
 
     /** Lifetime capture counter from StorageService. */
     public int64 lifetime_captures { get; set; default = 0; }
+
+    /** SHA-256 hash of the previous heartbeat message, for chain integrity. */
+    public string previous_heartbeat_hash { get; private set; default = ""; }
 
     /** List of tamper events since last heartbeat. */
     private GenericArray<string> _tamper_events;
 
     private Vigil.Services.MatrixTransportService? _matrix_svc;
     private uint _timeout_source = 0;
+    private bool _attestation_sent = false;
 
     /** Monotonic timestamp (usec) of last successful or attempted heartbeat. */
     private int64 _last_heartbeat_monotonic = 0;
@@ -129,6 +136,9 @@ public class Vigil.Services.HeartbeatService : Object {
         is_running = true;
         start_time = new DateTime.now_local ();
         _last_heartbeat_monotonic = GLib.get_monotonic_time ();
+
+        // Restore chain state across restarts
+        load_chain_state ();
 
         // Load persisted alerts from a previous run
         load_persisted_alerts ();
@@ -200,8 +210,9 @@ public class Vigil.Services.HeartbeatService : Object {
         var minutes = (uptime % 3600) / 60;
 
         var sb = new StringBuilder ();
-        sb.append ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d | seq: %lld | lifetime: %lld".printf (
-            hours, minutes, screenshots_since_last, pending_upload_count, sequence_number, lifetime_captures
+        var prev_hash = previous_heartbeat_hash != "" ? previous_heartbeat_hash : "genesis";
+        sb.append ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d | seq: %lld | lifetime: %lld | prev: %s".printf (
+            hours, minutes, screenshots_since_last, pending_upload_count, sequence_number, lifetime_captures, prev_hash
         ));
 
         // Detect gap (sleep/wake or network outage recovery)
@@ -230,6 +241,12 @@ public class Vigil.Services.HeartbeatService : Object {
         var deadline = new DateTime.now_local ().add_seconds (interval_seconds * 2);
         sb.append (" | next check-in by: %s".printf (deadline.format ("%H:%M")));
 
+        // Include environment attestation in the first heartbeat only
+        if (!_attestation_sent && environment_attestation != "") {
+            sb.append ("\nenv: %s".printf (environment_attestation));
+            _attestation_sent = true;
+        }
+
         // Include config hash with optional Ed25519 signature
         if (config_hash != "") {
             sb.append ("\nconfig: %s".printf (config_hash));
@@ -238,6 +255,15 @@ public class Vigil.Services.HeartbeatService : Object {
                 if (signature != "") {
                     sb.append (" | sig: %s".printf (signature));
                 }
+            }
+        }
+
+        // Append chain integrity signature (Ed25519 over SHA-256 of message so far)
+        if (encryption != null && encryption.is_ready) {
+            var chain_hash = SecurityUtils.compute_sha256_hex_string (sb.str);
+            var chain_sig = encryption.sign_string (chain_hash);
+            if (chain_sig != "") {
+                sb.append ("\nchain: %s | sig: %s".printf (chain_hash, chain_sig));
             }
         }
 
@@ -274,6 +300,7 @@ public class Vigil.Services.HeartbeatService : Object {
 
         sequence_number++;
         var message = build_heartbeat_message ();
+        var message_hash = SecurityUtils.compute_sha256_hex_string (message);
         var sent = yield _matrix_svc.send_text_message (message);
 
         if (sent) {
@@ -281,6 +308,8 @@ public class Vigil.Services.HeartbeatService : Object {
             screenshots_since_last = 0;
             _tamper_events.remove_range (0, _tamper_events.length);
             _last_heartbeat_monotonic = GLib.get_monotonic_time ();
+            previous_heartbeat_hash = message_hash;
+            persist_chain_state ();
             heartbeat_sent (new DateTime.now_local ());
             // Clear persisted alerts since they were successfully sent
             clear_persisted_alerts ();
@@ -344,6 +373,62 @@ public class Vigil.Services.HeartbeatService : Object {
             }
         } catch (Error e) {
             debug ("Failed to load persisted alerts: %s", e.message);
+        }
+    }
+
+    /**
+     * Persist heartbeat chain state (sequence number + previous hash) to disk.
+     */
+    private void persist_chain_state () {
+        if (data_dir == "") {
+            return;
+        }
+
+        var path = Path.build_filename (data_dir, "heartbeat_chain");
+        var content = "%lld\n%s\n".printf (sequence_number, previous_heartbeat_hash);
+
+        try {
+            SecurityUtils.write_secure_file (path, content);
+        } catch (Error e) {
+            debug ("Failed to persist chain state: %s", e.message);
+        }
+    }
+
+    /**
+     * Load heartbeat chain state from disk to restore chain across restarts.
+     */
+    private void load_chain_state () {
+        if (data_dir == "") {
+            return;
+        }
+
+        var path = Path.build_filename (data_dir, "heartbeat_chain");
+        if (!FileUtils.test (path, FileTest.EXISTS)) {
+            return;
+        }
+
+        try {
+            string contents;
+            FileUtils.get_contents (path, out contents);
+            var lines = contents.split ("\n");
+
+            if (lines.length >= 1 && lines[0].strip () != "") {
+                sequence_number = int64.parse (lines[0].strip ());
+            }
+
+            if (lines.length >= 2 && lines[1].strip () != "") {
+                previous_heartbeat_hash = lines[1].strip ();
+            }
+
+            if (sequence_number > 0 || previous_heartbeat_hash != "") {
+                debug ("Restored heartbeat chain: seq=%lld, prev=%s",
+                    sequence_number,
+                    previous_heartbeat_hash.length >= 16
+                        ? previous_heartbeat_hash.substring (0, 16) + "\u2026"
+                        : previous_heartbeat_hash);
+            }
+        } catch (Error e) {
+            debug ("Failed to load chain state: %s", e.message);
         }
     }
 

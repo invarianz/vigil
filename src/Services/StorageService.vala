@@ -17,6 +17,9 @@
  */
 public class Vigil.Services.StorageService : Object {
 
+    /** Emitted before the service deletes a file, so watchers can expect it. */
+    public signal void will_delete_file (string path);
+
     /** Maximum number of screenshots to retain locally. */
     public int max_local_screenshots { get; set; default = 100; }
 
@@ -218,12 +221,18 @@ public class Vigil.Services.StorageService : Object {
         var basename = Path.get_basename (screenshot_path);
         var marker_path = Path.build_filename (pending_dir, basename + ".pending");
 
+        // Notify watchers before deletion so they can register expected deletions
+        will_delete_file (marker_path);
+
         // Delete marker directly -- skip query_exists to avoid redundant stat()
         try {
             File.new_for_path (marker_path).delete ();
         } catch (Error e) {
             // Marker may already be gone; not an error
         }
+
+        // Notify watchers before deletion
+        will_delete_file (screenshot_path);
 
         // Delete the screenshot file -- it's been delivered, no need to keep it
         try {
@@ -372,6 +381,7 @@ public class Vigil.Services.StorageService : Object {
 
                 // Only delete if already uploaded (no pending marker)
                 if (!FileUtils.test (marker_path, FileTest.EXISTS)) {
+                    will_delete_file (file_path);
                     try {
                         File.new_for_path (file_path).delete ();
                         deleted++;

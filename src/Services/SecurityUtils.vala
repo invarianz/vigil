@@ -21,25 +21,49 @@ public class Vigil.Services.SecurityUtils : Object {
     /** Process-wide cached /dev/urandom stream. */
     private static DataInputStream? _urandom = null;
 
+    /** Cached application data directory path. */
+    private static string? _cached_app_data_dir = null;
+
+    /** Cached crypto directory path. */
+    private static string? _cached_crypto_dir = null;
+
     /**
      * Get the application data directory path.
      *
      * Returns: ~/.local/share/io.github.invarianz.vigil
+     * The result is cached after first call since XDG_DATA_HOME never changes.
      */
     public static string get_app_data_dir () {
-        return Path.build_filename (
-            Environment.get_user_data_dir (),
-            "io.github.invarianz.vigil"
-        );
+        if (_cached_app_data_dir == null) {
+            _cached_app_data_dir = Path.build_filename (
+                Environment.get_user_data_dir (),
+                "io.github.invarianz.vigil"
+            );
+        }
+        return _cached_app_data_dir;
     }
 
     /**
      * Get the cryptographic storage directory path.
      *
      * Returns: ~/.local/share/io.github.invarianz.vigil/crypto
+     * The result is cached after first call.
      */
     public static string get_crypto_dir () {
-        return Path.build_filename (get_app_data_dir (), "crypto");
+        if (_cached_crypto_dir == null) {
+            _cached_crypto_dir = Path.build_filename (get_app_data_dir (), "crypto");
+        }
+        return _cached_crypto_dir;
+    }
+
+    /**
+     * Reset cached directory paths.
+     *
+     * Only needed in tests that override XDG_DATA_HOME between calls.
+     */
+    public static void reset_cached_paths () {
+        _cached_app_data_dir = null;
+        _cached_crypto_dir = null;
     }
 
     /**
@@ -115,6 +139,101 @@ public class Vigil.Services.SecurityUtils : Object {
      */
     public static string compute_sha256_hex_string (string data) {
         return compute_sha256_hex (data.data);
+    }
+
+    /**
+     * Harden the current process against debugging and injection.
+     *
+     * 1. Calls prctl(PR_SET_DUMPABLE, 0) to prevent ptrace and core dumps
+     * 2. Checks LD_PRELOAD for library injection
+     *
+     * Returns a list of deferred tamper event descriptions (format:
+     * "event_type:details") since TamperDetectionService may not exist yet.
+     */
+    public static GenericArray<string> harden_process () {
+        var events = new GenericArray<string> ();
+
+        // Prevent ptrace attach and core dumps
+        int ret = Linux.prctl (Linux.PR_SET_DUMPABLE, 0);
+        if (ret != 0) {
+            events.add ("prctl_failed:prctl(PR_SET_DUMPABLE, 0) returned %d".printf (ret));
+        }
+
+        // Detect LD_PRELOAD injection
+        var ld_preload = Environment.get_variable ("LD_PRELOAD");
+        if (ld_preload != null && ld_preload.strip () != "") {
+            events.add ("ld_preload_detected:LD_PRELOAD is set: %s".printf (ld_preload));
+        }
+
+        return events;
+    }
+
+    /**
+     * Collect startup environment attestation for the first heartbeat.
+     *
+     * Returns a compact multi-field string describing the runtime
+     * environment so the partner can verify where the daemon is running.
+     */
+    public static string collect_environment_attestation (string binary_path, string binary_hash) {
+        var sb = new StringBuilder ();
+
+        // Hostname
+        sb.append ("host: %s".printf (Environment.get_host_name ()));
+
+        // Session type
+        var session = Vigil.Utils.detect_session_type ();
+        sb.append (" | session: %s".printf (session.to_string ()));
+
+        // Binary path and hash
+        sb.append (" | binary: %s".printf (binary_path));
+        sb.append (" | binary_hash: %s".printf (
+            binary_hash.length >= 16 ? binary_hash.substring (0, 16) + "\u2026" : binary_hash));
+
+        // Flatpak detection
+        bool is_flatpak = FileUtils.test ("/.flatpak-info", FileTest.EXISTS);
+        sb.append (" | flatpak: %s".printf (is_flatpak ? "yes" : "no"));
+
+        // Container detection (docker/lxc/podman via cgroup)
+        string container = "none";
+        try {
+            string cgroup_contents;
+            FileUtils.get_contents ("/proc/self/cgroup", out cgroup_contents);
+            var lower = cgroup_contents.down ();
+            if (lower.contains ("docker") || lower.contains ("lxc") || lower.contains ("podman")) {
+                container = "detected";
+            }
+        } catch (Error e) {
+            // Not available -- leave as "none"
+        }
+        sb.append (" | container: %s".printf (container));
+
+        // PID namespace detection (NSpid in /proc/self/status)
+        string pidns = "unknown";
+        try {
+            string status_contents;
+            FileUtils.get_contents ("/proc/self/status", out status_contents);
+            foreach (var line in status_contents.split ("\n")) {
+                if (line.has_prefix ("NSpid:")) {
+                    var parts = line.substring (6).strip ().split ("\t");
+                    pidns = parts.length > 1 ? "nested" : "root";
+                    break;
+                }
+            }
+        } catch (Error e) {
+            // Not available
+        }
+        sb.append (" | pidns: %s".printf (pidns));
+
+        // Mount namespace ID
+        string mntns = "unknown";
+        try {
+            mntns = FileUtils.read_link ("/proc/self/ns/mnt");
+        } catch (Error e) {
+            // Not available
+        }
+        sb.append (" | mntns: %s".printf (mntns));
+
+        return sb.str;
     }
 
     /**

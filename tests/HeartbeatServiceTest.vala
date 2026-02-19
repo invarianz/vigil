@@ -208,6 +208,65 @@ void test_offline_notice_includes_seq () {
     assert_true (msg.contains ("seq:"));
 }
 
+void test_heartbeat_chain_prev_genesis () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    // First message should contain "prev: genesis"
+    var msg = svc.build_heartbeat_message ();
+    assert_true (msg.contains ("prev: genesis"));
+}
+
+void test_heartbeat_chain_persistence () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+
+    // Write a chain state file
+    var chain_path = Path.build_filename (dir, "heartbeat_chain");
+    try {
+        FileUtils.set_contents (chain_path, "42\nabcdef1234567890\n");
+    } catch (Error e) { assert_not_reached (); }
+
+    // New instance should load chain state
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.data_dir = dir;
+    svc.start ();
+    svc.stop ();
+
+    assert_true (svc.sequence_number == 42);
+    var msg = svc.build_heartbeat_message ();
+    assert_true (msg.contains ("prev: abcdef1234567890"));
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_heartbeat_chain_no_signature_without_encryption () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    // encryption is null by default
+
+    var msg = svc.build_heartbeat_message ();
+    assert_false (msg.contains ("chain:"));
+}
+
+void test_environment_attestation_in_first_heartbeat () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.environment_attestation = "host: testbox | session: X11";
+
+    var msg1 = svc.build_heartbeat_message ();
+    assert_true (msg1.contains ("env: host: testbox"));
+
+    // Second message should NOT contain attestation
+    var msg2 = svc.build_heartbeat_message ();
+    assert_false (msg2.contains ("env:"));
+}
+
+void test_environment_attestation_empty_omitted () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    // environment_attestation is empty by default
+
+    var msg = svc.build_heartbeat_message ();
+    assert_false (msg.contains ("env:"));
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -243,6 +302,16 @@ public static int main (string[] args) {
         test_message_size_capped);
     Test.add_func ("/heartbeat/offline_notice_seq",
         test_offline_notice_includes_seq);
+    Test.add_func ("/heartbeat/chain_prev_genesis",
+        test_heartbeat_chain_prev_genesis);
+    Test.add_func ("/heartbeat/chain_persistence",
+        test_heartbeat_chain_persistence);
+    Test.add_func ("/heartbeat/chain_no_sig_without_encryption",
+        test_heartbeat_chain_no_signature_without_encryption);
+    Test.add_func ("/heartbeat/attestation_first_heartbeat",
+        test_environment_attestation_in_first_heartbeat);
+    Test.add_func ("/heartbeat/attestation_empty_omitted",
+        test_environment_attestation_empty_omitted);
 
     return Test.run ();
 }

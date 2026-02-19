@@ -158,6 +158,11 @@ These alerts fire when:
 | `capture_counter_tampered` | The lifetime capture counter file was modified (HMAC mismatch) |
 | `e2ee_init_failed` | Encryption failed to start -- screenshots would be sent unencrypted, so monitoring is refused |
 | `background_permission_revoked` | Background running/autostart permission was revoked |
+| `ld_preload_detected` | LD_PRELOAD environment variable is set (possible library injection) |
+| `prctl_failed` | Failed to disable process core dumps/ptrace (process hardening failed) |
+| `screenshot_deleted` | A screenshot file was unexpectedly deleted (not by the daemon) |
+| `marker_deleted` | A pending upload marker was unexpectedly deleted (not by the daemon) |
+| `crypto_file_tampered` | A file in the crypto directory was modified or deleted |
 
 ### Forced kill or uninstall
 

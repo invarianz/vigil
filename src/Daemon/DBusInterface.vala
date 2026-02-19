@@ -204,6 +204,40 @@ public class Vigil.Daemon.DBusServer : Object {
 
         _heartbeat_svc.lifetime_captures = _storage_svc.lifetime_captures;
 
+        // Wire binary integrity self-check
+        try {
+            var binary_path = FileUtils.read_link ("/proc/self/exe");
+            uint8[] binary_data;
+            FileUtils.get_data (binary_path, out binary_data);
+            var binary_hash = Vigil.Services.SecurityUtils.compute_sha256_hex (binary_data);
+
+            _tamper_svc.daemon_binary_path = binary_path;
+            _tamper_svc.expected_binary_hash = binary_hash;
+
+            // Cross-session detection: compare with previously stored hash
+            var data_dir = Vigil.Services.SecurityUtils.get_app_data_dir ();
+            var hash_file = Path.build_filename (data_dir, "binary_hash");
+            if (FileUtils.test (hash_file, FileTest.EXISTS)) {
+                string stored_hash;
+                FileUtils.get_contents (hash_file, out stored_hash);
+                stored_hash = stored_hash.strip ();
+                if (stored_hash != "" && stored_hash != binary_hash) {
+                    _tamper_svc.report_tamper ("binary_modified",
+                        "Daemon binary changed since last run (was %s, now %s)".printf (
+                            stored_hash.substring (0, 16) + "\u2026",
+                            binary_hash.substring (0, 16) + "\u2026"));
+                }
+            }
+            Vigil.Services.SecurityUtils.write_secure_file (hash_file, binary_hash);
+
+            // Collect environment attestation for the first heartbeat
+            _heartbeat_svc.environment_attestation =
+                Vigil.Services.SecurityUtils.collect_environment_attestation (
+                    binary_path, binary_hash);
+        } catch (Error e) {
+            debug ("Could not set up binary integrity check: %s", e.message);
+        }
+
         yield _screenshot_svc.initialize ();
 
         apply_settings ();
@@ -214,6 +248,9 @@ public class Vigil.Daemon.DBusServer : Object {
 
         // Start tamper detection
         _tamper_svc.start ();
+
+        // Start inotify watches on screenshots, pending, and crypto directories
+        _tamper_svc.start_file_monitoring ();
 
         // Start monitoring if previously enabled
         if (_settings.get_boolean ("monitoring-enabled")) {
@@ -277,6 +314,10 @@ public class Vigil.Daemon.DBusServer : Object {
             if (_matrix_svc.is_configured) {
                 _matrix_svc.send_alert.begin (event_type, details);
             }
+        });
+
+        _storage_svc.will_delete_file.connect ((path) => {
+            _tamper_svc.expect_deletion (path);
         });
 
         _heartbeat_svc.heartbeat_sent.connect (() => {

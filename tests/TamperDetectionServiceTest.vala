@@ -644,6 +644,154 @@ void test_stop_cleans_up_urandom () {
     assert_false (svc.is_running);
 }
 
+void test_binary_integrity_valid_binary () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+
+    var binary_path = Path.build_filename (dir, "fake_binary");
+    var content = "this is a fake binary for testing";
+    try { FileUtils.set_contents (binary_path, content); } catch (Error e) { assert_not_reached (); }
+
+    var hash = Vigil.Services.SecurityUtils.compute_sha256_hex (content.data);
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.daemon_binary_path = binary_path;
+    svc.expected_binary_hash = hash;
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_binary_integrity ();
+    assert_true (event_type == null);
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_binary_integrity_modified () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+
+    var binary_path = Path.build_filename (dir, "fake_binary");
+    try { FileUtils.set_contents (binary_path, "original content"); } catch (Error e) { assert_not_reached (); }
+
+    // Use a wrong hash to simulate modification
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.daemon_binary_path = binary_path;
+    svc.expected_binary_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_binary_integrity ();
+    assert_true (event_type == "binary_modified");
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_binary_integrity_missing () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.daemon_binary_path = "/tmp/definitely_does_not_exist_binary";
+    svc.expected_binary_hash = "somehash";
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_binary_integrity ();
+    assert_true (event_type == "binary_missing");
+}
+
+void test_file_monitoring_expected_deletion () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+    // Isolate crypto dir so inotify doesn't watch the real user dir
+    // (avoids race conditions when parallel test binaries modify crypto files)
+    Environment.set_variable ("XDG_DATA_HOME", dir, true);
+    Vigil.Services.SecurityUtils.reset_cached_paths ();
+    var screenshots = Path.build_filename (dir, "screenshots");
+    DirUtils.create_with_parents (screenshots, 0755);
+
+    // Create a file to delete
+    var file_path = Path.build_filename (screenshots, "test.png");
+    try { FileUtils.set_contents (file_path, "fake"); } catch (Error e) { assert_not_reached (); }
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.screenshots_dir = screenshots;
+    svc.pending_dir = Path.build_filename (dir, "pending");
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    // Register expected deletion, then start monitoring
+    svc.expect_deletion (file_path);
+    svc.start_file_monitoring ();
+
+    // Delete the file
+    FileUtils.remove (file_path);
+
+    // Process pending events
+    var ctx = MainContext.default ();
+    for (int i = 0; i < 50; i++) {
+        ctx.iteration (false);
+    }
+
+    assert_true (event_type == null);
+
+    svc.stop_file_monitoring ();
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_file_monitoring_unexpected_deletion () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+    Environment.set_variable ("XDG_DATA_HOME", dir, true);
+    Vigil.Services.SecurityUtils.reset_cached_paths ();
+    var screenshots = Path.build_filename (dir, "screenshots");
+    DirUtils.create_with_parents (screenshots, 0755);
+
+    // Create a file to delete unexpectedly
+    var file_path = Path.build_filename (screenshots, "unexpected.png");
+    try { FileUtils.set_contents (file_path, "fake"); } catch (Error e) { assert_not_reached (); }
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.screenshots_dir = screenshots;
+    svc.pending_dir = Path.build_filename (dir, "pending");
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.start_file_monitoring ();
+
+    // Delete without registering
+    FileUtils.remove (file_path);
+
+    // Process pending events (inotify is async)
+    var loop = new MainLoop ();
+    Timeout.add (200, () => { loop.quit (); return Source.REMOVE; });
+    loop.run ();
+
+    assert_true (event_type == "screenshot_deleted");
+
+    svc.stop_file_monitoring ();
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_file_monitoring_stop_is_safe () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+    Environment.set_variable ("XDG_DATA_HOME", dir, true);
+    Vigil.Services.SecurityUtils.reset_cached_paths ();
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    // Double start/stop should not crash
+    svc.start_file_monitoring ();
+    svc.start_file_monitoring ();
+    svc.stop_file_monitoring ();
+    svc.stop_file_monitoring ();
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -684,6 +832,15 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/background_permission_revoked_event",
         test_emit_background_permission_revoked);
     Test.add_func ("/tamper/stop_cleans_up_urandom", test_stop_cleans_up_urandom);
+    Test.add_func ("/tamper/binary_integrity_valid", test_binary_integrity_valid_binary);
+    Test.add_func ("/tamper/binary_integrity_modified", test_binary_integrity_modified);
+    Test.add_func ("/tamper/binary_integrity_missing", test_binary_integrity_missing);
+    Test.add_func ("/tamper/file_monitoring_expected_deletion",
+        test_file_monitoring_expected_deletion);
+    Test.add_func ("/tamper/file_monitoring_unexpected_deletion",
+        test_file_monitoring_unexpected_deletion);
+    Test.add_func ("/tamper/file_monitoring_stop_is_safe",
+        test_file_monitoring_stop_is_safe);
 
     return Test.run ();
 }
