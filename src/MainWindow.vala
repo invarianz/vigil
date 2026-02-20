@@ -161,24 +161,26 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
             return;
         }
 
-        status_view.set_monitoring_active (_daemon.monitoring_active);
+        // Read monitoring state from GSettings (source of truth) rather than
+        // D-Bus proxy property, which may have a stale cached value.
+        status_view.set_monitoring_active (settings.get_boolean ("monitoring-enabled"));
         status_view.set_backend_name (_daemon.active_backend_name);
-        status_view.set_pending_count (_daemon.pending_upload_count);
 
-        var next_iso = _daemon.next_capture_time_iso;
-        if (next_iso != "") {
-            var next = new DateTime.from_iso8601 (next_iso, new TimeZone.local ());
-            status_view.set_next_capture_time (next);
-        } else {
-            status_view.set_next_capture_time (null);
-        }
+        try {
+            var status_json = _daemon.get_status_json ();
+            var parser = new Json.Parser ();
+            parser.load_from_data (status_json);
+            var obj = parser.get_root ().get_object ();
 
-        var last_iso = _daemon.last_capture_time_iso;
-        if (last_iso != "") {
-            var last = new DateTime.from_iso8601 (last_iso, new TimeZone.local ());
-            status_view.set_last_capture_time (last);
-        } else {
-            status_view.set_last_capture_time (null);
+            var last_iso = obj.get_string_member ("last_capture");
+            if (last_iso != "") {
+                var last = new DateTime.from_iso8601 (last_iso, new TimeZone.local ());
+                status_view.set_last_capture_time (last);
+            } else {
+                status_view.set_last_capture_time (null);
+            }
+        } catch (Error e) {
+            debug ("Failed to get daemon status: %s", e.message);
         }
     }
 

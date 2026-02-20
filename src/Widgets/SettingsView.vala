@@ -123,7 +123,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         }
 
         username_entry = new Gtk.Entry () {
-            placeholder_text = "your_username",
+            placeholder_text = "username (without @user:server)",
             hexpand = true
         };
 
@@ -299,6 +299,11 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             return;
         }
         settings.set_string ("matrix-room-id", new_room_id);
+        set_status ("Locking down room permissions\u2026", false);
+
+        // Step 3b: Lock down power levels (separate call so invites
+        // aren't blocked by the creator's demotion during createRoom)
+        yield _matrix_svc.set_room_power_levels (new_room_id, partner_id);
         set_status ("Setting up E2EE\u2026", false);
 
         // Step 4: Initialize E2EE
@@ -501,13 +506,14 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             "(in person, phone, or another chat)."
         );
 
-        // Show the code in the UI (displayed once, not persisted anywhere)
-        set_status (
-            "Settings locked. Unlock code: %s\n".printf (code) +
+        // Show the code prominently in the lock section (directly above
+        // the unlock entry field, so the user can't miss it)
+        lock_status_label.label =
+            "Unlock code: %s\n".printf (code) +
             "Share this code with your partner now (in person, phone, " +
-            "or another chat). It will not be shown again.",
-            true
-        );
+            "or another chat). It will not be shown again.";
+        lock_status_label.remove_css_class ("error");
+        lock_status_label.add_css_class ("success");
 
         update_lock_ui ();
     }
@@ -583,10 +589,13 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         lock_box.visible = true;
 
         if (locked) {
-            lock_status_label.label =
-                "Settings are locked. Ask your accountability partner" +
-                " for the unlock code to make changes.";
-            lock_status_label.remove_css_class ("error");
+            // Don't overwrite the label if it's showing the one-time unlock code
+            if (!lock_status_label.label.contains ("Unlock code:")) {
+                lock_status_label.label =
+                    "Settings are locked. Ask your accountability partner" +
+                    " for the unlock code to make changes.";
+                lock_status_label.remove_css_class ("error");
+            }
             unlock_entry.visible = true;
             unlock_button.visible = true;
             lock_button.visible = false;

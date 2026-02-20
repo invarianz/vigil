@@ -61,6 +61,8 @@ public class Vigil.Daemon.DBusServer : Object {
     private uint _batch_upload_source = 0;
     private int _batch_upload_interval = 600;
     private uint _background_portal_source = 0;
+    private uint _key_sharing_source = 0;
+    private bool _room_keys_shared = false;
 
     /* D-Bus properties */
 
@@ -266,6 +268,13 @@ public class Vigil.Daemon.DBusServer : Object {
         apply_settings ();
         bind_settings ();
 
+        // Initialize E2EE from stored credentials (before file monitoring
+        // starts, so pickle writes don't trigger crypto_file_tampered)
+        initialize_encryption ();
+
+        // Share room keys with partner (retries until successful)
+        schedule_key_sharing ();
+
         // Start heartbeat
         _heartbeat_svc.start ();
 
@@ -422,8 +431,14 @@ public class Vigil.Daemon.DBusServer : Object {
             _matrix_svc.room_id = _settings.get_string ("matrix-room-id");
         });
 
-        // Re-initialize E2EE when setup completes while daemon is running
+        // Re-initialize E2EE when setup completes while daemon is running.
+        // Watch both pickle-key and device-id: if the user re-runs setup
+        // with the same pickle password, only device-id changes (new login),
+        // and vice versa.
         _settings.changed["e2ee-pickle-key"].connect (() => {
+            initialize_encryption ();
+        });
+        _settings.changed["device-id"].connect (() => {
             initialize_encryption ();
         });
     }
@@ -457,6 +472,10 @@ public class Vigil.Daemon.DBusServer : Object {
             // Wire up encryption for config hash signing in heartbeats
             _heartbeat_svc.encryption = enc;
             debug ("E2EE (re)initialized from settings (session: %s)", enc.megolm_session_id);
+
+            // Share room keys with partner (new session or first init)
+            _room_keys_shared = false;
+            schedule_key_sharing ();
         } else {
             warning ("E2EE initialization failed");
         }
@@ -531,6 +550,53 @@ public class Vigil.Daemon.DBusServer : Object {
         _tamper_svc.display_service_exe = exe;
         _tamper_svc.display_service_name = bus_name;
         debug ("Display service: %s PID=%u exe=%s", bus_name, pid, exe);
+    }
+
+    /**
+     * Schedule room key sharing with the partner.
+     *
+     * Attempts to share the Megolm session key immediately, then retries
+     * every 60 seconds until successful. This handles the case where
+     * the partner hasn't set up their Element client yet when Vigil
+     * first runs, or when the daemon restarts with a new session.
+     */
+    private void schedule_key_sharing () {
+        if (_room_keys_shared || _key_sharing_source != 0) {
+            return;
+        }
+
+        var partner_id = _settings.get_string ("partner-matrix-id");
+        if (partner_id == "") {
+            return;
+        }
+
+        if (_matrix_svc.encryption == null ||
+            !_matrix_svc.encryption.is_ready ||
+            !_matrix_svc.is_configured) {
+            return;
+        }
+
+        attempt_key_sharing.begin (partner_id);
+    }
+
+    private async void attempt_key_sharing (string partner_id) {
+        bool success = yield _matrix_svc.share_room_keys_with_partner (partner_id);
+        if (success) {
+            _room_keys_shared = true;
+            debug ("Room keys shared with partner successfully");
+            return;
+        }
+
+        // Retry after 60 seconds
+        debug ("Key sharing failed, will retry in 60s");
+        _key_sharing_source = Timeout.add_seconds (60, () => {
+            _key_sharing_source = 0;
+            var pid = _settings.get_string ("partner-matrix-id");
+            if (pid != "" && !_room_keys_shared) {
+                attempt_key_sharing.begin (pid);
+            }
+            return Source.REMOVE;
+        });
     }
 
     private async void handle_capture () {

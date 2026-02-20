@@ -8,6 +8,8 @@
  * based on the current session type and backend availability.
  *
  * Falls back gracefully: Portal -> Gala -> error.
+ * If the primary backend fails at capture time (e.g. Portal outside
+ * Flatpak), the service falls back to the next available backend.
  */
 public class Vigil.Services.ScreenshotService : Object {
 
@@ -15,6 +17,7 @@ public class Vigil.Services.ScreenshotService : Object {
     public signal void screenshot_failed (string error_message);
 
     private IScreenshotBackend? _active_backend = null;
+    private IScreenshotBackend? _fallback_backend = null;
 
     public string? active_backend_name {
         get {
@@ -29,17 +32,19 @@ public class Vigil.Services.ScreenshotService : Object {
         var session = Vigil.Utils.detect_session_type ();
         debug ("Detected session type: %s", session.to_string ());
 
-        if (session == Vigil.Utils.SessionType.WAYLAND) {
-            // On Wayland, prefer the portal backend
+        var in_flatpak = FileUtils.test ("/.flatpak-info", FileTest.EXISTS);
+
+        if (session == Vigil.Utils.SessionType.WAYLAND && in_flatpak) {
+            // Inside Flatpak, Portal is the only reliable backend
             var portal = new PortalScreenshotBackend ();
             if (yield portal.is_available ()) {
                 _active_backend = portal;
-                debug ("Using Portal screenshot backend");
+                debug ("Using Portal screenshot backend (Flatpak)");
                 return;
             }
         }
 
-        // On X11, try Gala first (direct, no confirmation needed)
+        // Try Gala (direct, no confirmation needed)
         var gala = new GalaScreenshotBackend ();
         if (yield gala.is_available ()) {
             _active_backend = gala;
@@ -47,7 +52,7 @@ public class Vigil.Services.ScreenshotService : Object {
             return;
         }
 
-        // On X11 or if Gala isn't available, fall back to Portal
+        // Fall back to Portal
         var portal_fallback = new PortalScreenshotBackend ();
         if (yield portal_fallback.is_available ()) {
             _active_backend = portal_fallback;
@@ -76,15 +81,27 @@ public class Vigil.Services.ScreenshotService : Object {
             bool success = yield _active_backend.capture (destination_path);
             if (success) {
                 screenshot_taken (destination_path);
+                return true;
             }
-            return success;
         } catch (Error e) {
+            debug ("Primary backend (%s) failed: %s",
+                _active_backend.backend_name, e.message);
+
+            // Try fallback backend
+            if (_fallback_backend != null) {
+                debug ("Falling back to %s", _fallback_backend.backend_name);
+                _active_backend = _fallback_backend;
+                _fallback_backend = null;
+                return yield take_screenshot (destination_path);
+            }
+
             var msg = "Screenshot failed (%s): %s".printf (
                 _active_backend.backend_name, e.message
             );
             warning (msg);
             screenshot_failed (msg);
-            return false;
         }
+
+        return false;
     }
 }

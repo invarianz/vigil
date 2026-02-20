@@ -777,7 +777,7 @@ async bool test_full_e2ee_flow_async () {
     }
     debug ("Decrypted room key: %s", room_key_json);
 
-    // Parse the m.room_key content
+    // Parse the Olm plaintext envelope (type + content wrapper per Matrix spec)
     string? session_key = null;
     string? session_id = null;
     try {
@@ -785,15 +785,19 @@ async bool test_full_e2ee_flow_async () {
         parser.load_from_data (room_key_json);
         var rk = parser.get_root ().get_object ();
 
-        // Verify it's an m.room_key
-        if (rk.has_member ("algorithm")) {
-            assert_true (rk.get_string_member ("algorithm") == "m.megolm.v1.aes-sha2");
-        }
-        if (rk.has_member ("room_id")) {
-            assert_true (rk.get_string_member ("room_id") == mock_room_id);
-        }
-        session_key = rk.get_string_member ("session_key");
-        session_id = rk.get_string_member ("session_id");
+        // Verify the Olm plaintext envelope has required fields
+        assert_true (rk.get_string_member ("type") == "m.room_key");
+        assert_true (rk.has_member ("sender"));
+        assert_true (rk.has_member ("recipient"));
+        assert_true (rk.has_member ("keys"));
+        assert_true (rk.has_member ("recipient_keys"));
+
+        // The actual room key is inside "content"
+        var content = rk.get_object_member ("content");
+        assert_true (content.get_string_member ("algorithm") == "m.megolm.v1.aes-sha2");
+        assert_true (content.get_string_member ("room_id") == mock_room_id);
+        session_key = content.get_string_member ("session_key");
+        session_id = content.get_string_member ("session_id");
 
         assert_true (session_id == enc.megolm_session_id);
     } catch (Error e) {

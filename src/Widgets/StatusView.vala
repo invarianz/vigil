@@ -4,17 +4,18 @@
  */
 
 /**
- * Shows the current monitoring status: active/inactive, next capture time,
- * recent capture history, and any errors.
+ * Shows the current monitoring status: active/inactive, backend, and
+ * last capture time. Intentionally omits next-capture time and pending
+ * uploads -- exposing these to the monitored user would let them time
+ * evasive behavior between captures or attack the upload queue.
  */
 public class Vigil.Widgets.StatusView : Gtk.Box {
 
     private Gtk.Label status_label;
-    private Gtk.Label next_capture_label;
     private Gtk.Label last_capture_label;
     private Gtk.Label backend_label;
-    private Gtk.Label pending_uploads_label;
     private Gtk.Switch monitoring_switch;
+    private ulong _switch_handler_id;
 
     public signal void monitoring_toggled (bool active);
 
@@ -53,7 +54,7 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
         monitoring_switch = new Gtk.Switch () {
             valign = Gtk.Align.CENTER
         };
-        monitoring_switch.notify["active"].connect (() => {
+        _switch_handler_id = monitoring_switch.notify["active"].connect (() => {
             monitoring_toggled (monitoring_switch.active);
             update_status_display ();
         });
@@ -83,26 +84,12 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
         };
         info_card.append (create_info_row ("Screenshot method", backend_label));
 
-        // Next capture row
-        next_capture_label = new Gtk.Label ("\u2014") {
-            halign = Gtk.Align.END,
-            hexpand = true
-        };
-        info_card.append (create_info_row ("Next capture", next_capture_label));
-
         // Last capture row
         last_capture_label = new Gtk.Label ("\u2014") {
             halign = Gtk.Align.END,
             hexpand = true
         };
         info_card.append (create_info_row ("Last capture", last_capture_label));
-
-        // Pending uploads row
-        pending_uploads_label = new Gtk.Label ("0") {
-            halign = Gtk.Align.END,
-            hexpand = true
-        };
-        info_card.append (create_info_row ("Pending uploads", pending_uploads_label));
 
         var icon = new Gtk.Image.from_icon_name ("io.github.invarianz.vigil") {
             pixel_size = 128,
@@ -119,7 +106,9 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
     }
 
     public void set_monitoring_active (bool active) {
+        SignalHandler.block (monitoring_switch, _switch_handler_id);
         monitoring_switch.active = active;
+        SignalHandler.unblock (monitoring_switch, _switch_handler_id);
         update_status_display ();
     }
 
@@ -127,28 +116,11 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
         backend_label.label = name ?? "Not available";
     }
 
-    public void set_next_capture_time (DateTime? time) {
-        if (time == null) {
-            next_capture_label.label = "\u2014";
-        } else {
-            next_capture_label.label = time.format ("%H:%M:%S");
-        }
-    }
-
     public void set_last_capture_time (DateTime? time) {
         if (time == null) {
             last_capture_label.label = "\u2014";
         } else {
             last_capture_label.label = time.format ("%H:%M:%S");
-        }
-    }
-
-    public void set_pending_count (int count) {
-        pending_uploads_label.label = count.to_string ();
-        if (count > 10) {
-            pending_uploads_label.add_css_class ("warning");
-        } else {
-            pending_uploads_label.remove_css_class ("warning");
         }
     }
 

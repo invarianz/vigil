@@ -301,47 +301,9 @@ public class Vigil.Services.MatrixTransportService : Object {
             builder.add_string_value (partner_id);
             builder.end_array ();
 
-            // Initial room state events
+            // Enable encryption from the start
             builder.set_member_name ("initial_state");
             builder.begin_array ();
-
-            // Power levels: partner is admin (100), monitored user restricted (10).
-            // This prevents the monitored user from redacting screenshots,
-            // kicking the partner, or changing room state.
-            if (_last_user_id != "") {
-                builder.begin_object ();
-                builder.set_member_name ("type");
-                builder.add_string_value ("m.room.power_levels");
-                builder.set_member_name ("state_key");
-                builder.add_string_value ("");
-                builder.set_member_name ("content");
-                builder.begin_object ();
-                builder.set_member_name ("users");
-                builder.begin_object ();
-                builder.set_member_name (_last_user_id);
-                builder.add_int_value (10);
-                builder.set_member_name (partner_id);
-                builder.add_int_value (100);
-                builder.end_object (); // users
-                builder.set_member_name ("users_default");
-                builder.add_int_value (0);
-                builder.set_member_name ("events_default");
-                builder.add_int_value (10);
-                builder.set_member_name ("state_default");
-                builder.add_int_value (100);
-                builder.set_member_name ("redact");
-                builder.add_int_value (100);
-                builder.set_member_name ("ban");
-                builder.add_int_value (100);
-                builder.set_member_name ("kick");
-                builder.add_int_value (100);
-                builder.set_member_name ("invite");
-                builder.add_int_value (100);
-                builder.end_object (); // content
-                builder.end_object ();
-            }
-
-            // Enable encryption from the start
             builder.begin_object ();
             builder.set_member_name ("type");
             builder.add_string_value ("m.room.encryption");
@@ -394,6 +356,91 @@ public class Vigil.Services.MatrixTransportService : Object {
         } catch (Error e) {
             warning ("Matrix room creation error: %s", e.message);
             return null;
+        }
+    }
+
+    /**
+     * Lock down room power levels after creation.
+     *
+     * Must be called while the creator still has power level 100 (before
+     * any demotion). This is done as a separate step because the Matrix
+     * createRoom endpoint processes invites AFTER initial_state, so
+     * demoting the creator in initial_state blocks the invite.
+     *
+     * PUT /_matrix/client/v3/rooms/{roomId}/state/m.room.power_levels
+     *
+     * @param target_room_id The room to lock down.
+     * @param partner_id The partner's Matrix user ID.
+     * @return true on success.
+     */
+    public async bool set_room_power_levels (string target_room_id,
+                                             string partner_id) {
+        if (homeserver_url == "" || access_token == "" ||
+            _last_user_id == "") {
+            return false;
+        }
+
+        try {
+            var url = "%s/_matrix/client/v3/rooms/%s/state/m.room.power_levels".printf (
+                homeserver_url,
+                Uri.escape_string (target_room_id, null, false)
+            );
+
+            var builder = new Json.Builder ();
+            builder.begin_object ();
+            builder.set_member_name ("users");
+            builder.begin_object ();
+            builder.set_member_name (_last_user_id);
+            builder.add_int_value (10);
+            builder.set_member_name (partner_id);
+            builder.add_int_value (100);
+            builder.end_object ();
+            builder.set_member_name ("users_default");
+            builder.add_int_value (0);
+            builder.set_member_name ("events_default");
+            builder.add_int_value (10);
+            builder.set_member_name ("state_default");
+            builder.add_int_value (100);
+            builder.set_member_name ("redact");
+            builder.add_int_value (100);
+            builder.set_member_name ("ban");
+            builder.add_int_value (100);
+            builder.set_member_name ("kick");
+            builder.add_int_value (100);
+            builder.set_member_name ("invite");
+            builder.add_int_value (100);
+            builder.end_object ();
+
+            var gen = new Json.Generator ();
+            gen.set_root (builder.get_root ());
+            var body_json = gen.to_data (null);
+
+            var message = new Soup.Message ("PUT", url);
+            message.set_request_body_from_bytes (
+                "application/json",
+                new Bytes (body_json.data)
+            );
+            message.get_request_headers ().append (
+                "Authorization", "Bearer %s".printf (access_token)
+            );
+
+            var response_bytes = yield _session.send_and_read_async (
+                message, Priority.DEFAULT, null
+            );
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("Power levels update failed (HTTP %u): %s",
+                    status, safe_log (resp));
+                return false;
+            }
+
+            debug ("Room power levels locked down");
+            return true;
+        } catch (Error e) {
+            warning ("Power levels update error: %s", e.message);
+            return false;
         }
     }
 
@@ -763,47 +810,19 @@ public class Vigil.Services.MatrixTransportService : Object {
         var body = "Screenshot %s".printf (time_str);
         var filename = Path.get_basename (file_path);
 
-        // When E2EE is active, encrypt the attachment before upload
-        if (encryption != null && encryption.is_ready) {
-            return yield send_encrypted_screenshot (file_data, filename, body);
-        }
+        // Extract PNG dimensions for inline preview in Matrix clients
+        int img_w = 0, img_h = 0;
+        read_png_dimensions (file_data, out img_w, out img_h);
 
-        // No E2EE: upload plaintext (fallback)
-        var content_uri = yield upload_bytes (
-            new Bytes.take ((owned) file_data), "image/png", filename);
-        if (content_uri == null) {
-            screenshot_send_failed (file_path, "Media upload failed");
+        // Never send screenshots without E2EE — they contain sensitive screen content
+        if (encryption == null || !encryption.is_ready) {
+            var msg = "E2EE not ready -- screenshot will be retried later";
+            warning (msg);
+            screenshot_send_failed (file_path, msg);
             return false;
         }
 
-        var builder = new Json.Builder ();
-        builder.begin_object ();
-        builder.set_member_name ("msgtype");
-        builder.add_string_value ("m.image");
-        builder.set_member_name ("body");
-        builder.add_string_value (body);
-        builder.set_member_name ("url");
-        builder.add_string_value (content_uri);
-        builder.set_member_name ("info");
-        builder.begin_object ();
-        builder.set_member_name ("mimetype");
-        builder.add_string_value ("image/png");
-        builder.end_object ();
-        builder.end_object ();
-
-        var gen = new Json.Generator ();
-        gen.set_root (builder.get_root ());
-        var content_json = gen.to_data (null);
-
-        var event_id = yield send_room_event ("m.room.message", content_json);
-        if (event_id == null) {
-            screenshot_send_failed (file_path, "Failed to send image event");
-            return false;
-        }
-
-        debug ("Matrix: sent screenshot %s as %s (unencrypted)", file_path, event_id);
-        screenshot_sent (file_path, event_id);
-        return true;
+        return yield send_encrypted_screenshot (file_data, filename, body, img_w, img_h);
     }
 
     /**
@@ -833,12 +852,28 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
+     * Read width and height from a PNG file's IHDR chunk (bytes 16-23).
+     */
+    private static void read_png_dimensions (uint8[] data, out int width, out int height) {
+        width = 0;
+        height = 0;
+        // PNG: 8-byte signature, then IHDR chunk: 4-byte length, 4-byte "IHDR",
+        // 4-byte width (big-endian), 4-byte height (big-endian) → offsets 16..23
+        if (data.length >= 24) {
+            width  = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
+            height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23];
+        }
+    }
+
+    /**
      * Encrypt a screenshot with AES-256-CTR, upload the ciphertext,
      * and send the event with embedded decryption metadata.
      */
     private async bool send_encrypted_screenshot (uint8[] plaintext_data,
                                                    string filename,
-                                                   string body) {
+                                                   string body,
+                                                   int img_w = 0,
+                                                   int img_h = 0) {
         // Step 1: Encrypt the file with AES-256-CTR
         var enc_result = encryption.encrypt_attachment (plaintext_data);
         if (enc_result == null) {
@@ -915,6 +950,14 @@ public class Vigil.Services.MatrixTransportService : Object {
         builder.begin_object ();
         builder.set_member_name ("mimetype");
         builder.add_string_value ("image/png");
+        builder.set_member_name ("size");
+        builder.add_int_value (plaintext_data.length);
+        if (img_w > 0 && img_h > 0) {
+            builder.set_member_name ("w");
+            builder.add_int_value (img_w);
+            builder.set_member_name ("h");
+            builder.add_int_value (img_h);
+        }
         builder.end_object ();
 
         builder.end_object (); // root
@@ -1110,6 +1153,22 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
+     * Share the current Megolm room key with the partner.
+     *
+     * Public wrapper for share_room_keys() so the daemon can retry
+     * key sharing periodically until it succeeds.
+     *
+     * @param partner_id The partner's Matrix user ID.
+     * @return true if keys were successfully shared.
+     */
+    public async bool share_room_keys_with_partner (string partner_id) {
+        if (encryption == null || !encryption.is_ready || !is_configured) {
+            return false;
+        }
+        return yield share_room_keys (encryption, partner_id);
+    }
+
+    /**
      * Share the Megolm room key with the partner's devices.
      *
      * Follows pantalaimon's approach:
@@ -1142,6 +1201,7 @@ public class Vigil.Services.MatrixTransportService : Object {
             var partner_devices = dk_obj.get_object_member (partner_id);
             var device_ids = new GenericArray<string> ();
             var device_curve_keys = new HashTable<string, string> (str_hash, str_equal);
+            var device_ed_keys = new HashTable<string, string> (str_hash, str_equal);
 
             partner_devices.foreach_member ((obj, dev_id, dev_node) => {
                 var dev = dev_node.get_object ();
@@ -1151,12 +1211,19 @@ public class Vigil.Services.MatrixTransportService : Object {
                 if (dev.has_member ("keys")) {
                     var keys = dev.get_object_member ("keys");
                     var curve_key_name = "curve25519:%s".printf (dev_id);
+                    var ed_key_name = "ed25519:%s".printf (dev_id);
                     if (keys.has_member (curve_key_name)) {
                         device_ids.add (dev_id);
                         device_curve_keys.insert (
                             dev_id,
                             keys.get_string_member (curve_key_name)
                         );
+                        if (keys.has_member (ed_key_name)) {
+                            device_ed_keys.insert (
+                                dev_id,
+                                keys.get_string_member (ed_key_name)
+                            );
+                        }
                     }
                 }
             });
@@ -1191,11 +1258,15 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             var partner_otks = otk_obj.get_object_member (partner_id);
 
-            // Build room key content
-            var room_key_content = enc.build_room_key_content (room_id);
-            if (room_key_content == null) {
+            // Build room key content and parse it once for reuse
+            var room_key_json = enc.build_room_key_content (room_id);
+            if (room_key_json == null) {
                 return false;
             }
+
+            var rk_parser = new Json.Parser ();
+            rk_parser.load_from_data (room_key_json);
+            var room_key_node = rk_parser.get_root ();
 
             // Build to-device messages
             var msg_builder = new Json.Builder ();
@@ -1230,11 +1301,43 @@ public class Vigil.Services.MatrixTransportService : Object {
                     return;
                 }
 
-                // Encrypt room key for this device using Olm
+                // Build proper Olm plaintext envelope per Matrix spec.
+                // The decrypted payload must include type, content, sender,
+                // recipient, recipient_keys, and keys for Element to process it.
+                var their_ed = device_ed_keys.lookup (dev_id);
+                var wrap = new Json.Builder ();
+                wrap.begin_object ();
+                wrap.set_member_name ("type");
+                wrap.add_string_value ("m.room_key");
+                wrap.set_member_name ("content");
+                wrap.add_value (room_key_node.copy ());
+                wrap.set_member_name ("sender");
+                wrap.add_string_value (enc.user_id);
+                wrap.set_member_name ("sender_device");
+                wrap.add_string_value (enc.device_id);
+                wrap.set_member_name ("recipient");
+                wrap.add_string_value (partner_id);
+                wrap.set_member_name ("recipient_keys");
+                wrap.begin_object ();
+                wrap.set_member_name ("ed25519");
+                wrap.add_string_value (their_ed ?? "");
+                wrap.end_object ();
+                wrap.set_member_name ("keys");
+                wrap.begin_object ();
+                wrap.set_member_name ("ed25519");
+                wrap.add_string_value (enc.ed25519_key);
+                wrap.end_object ();
+                wrap.end_object ();
+
+                var wrap_gen = new Json.Generator ();
+                wrap_gen.set_root (wrap.get_root ());
+                var wrapped_plaintext = wrap_gen.to_data (null);
+
+                // Encrypt wrapped room key for this device using Olm
                 var encrypted = enc.olm_encrypt_for_device (
                     their_curve,
                     claimed_key,
-                    room_key_content
+                    wrapped_plaintext
                 );
 
                 if (encrypted != null) {

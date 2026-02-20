@@ -59,6 +59,12 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Tracks whether the background portal flag was ever seen as true. */
     private bool _background_portal_was_granted = false;
 
+    /** Tracks whether monitoring was ever active (to avoid false alerts on first setup). */
+    private bool _monitoring_was_active = false;
+
+    /** Tracks whether settings were ever observed as locked. */
+    private bool _settings_were_locked = false;
+
     /** Paths that the daemon itself is about to delete (expected, not tamper). */
     private GenericSet<string> _expected_deletions;
 
@@ -261,6 +267,12 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Check that the autostart desktop file exists and hasn't been tampered with.
      */
     public void check_autostart_entry () {
+        // Only check if autostart was previously configured (skip in dev)
+        if (_settings != null &&
+            !_settings.get_boolean ("autostart-enabled")) {
+            return;
+        }
+
         // Single syscall: attempt to read directly, handle missing via exception.
         // Avoids a redundant stat() before the open().
         try {
@@ -283,6 +295,12 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Check that the systemd user service is enabled and active.
      */
     public void check_systemd_service () {
+        // Only check if autostart was previously configured (skip in dev)
+        if (_settings != null &&
+            !_settings.get_boolean ("autostart-enabled")) {
+            return;
+        }
+
         try {
             var enabled_proc = new Subprocess.newv (
                 { "systemctl", "--user", "is-enabled", "vigil-daemon.service" },
@@ -310,8 +328,14 @@ public class Vigil.Services.TamperDetectionService : Object {
             return;
         }
 
-        // Check if monitoring was disabled
-        if (!_settings.get_boolean ("monitoring-enabled")) {
+        // Track whether monitoring was ever active
+        if (_settings.get_boolean ("monitoring-enabled")) {
+            _monitoring_was_active = true;
+        }
+
+        // Only alert if monitoring was previously active and then disabled
+        if (_monitoring_was_active &&
+            !_settings.get_boolean ("monitoring-enabled")) {
             emit_tamper ("monitoring_disabled",
                 "Monitoring has been disabled via settings");
         }
@@ -332,17 +356,21 @@ public class Vigil.Services.TamperDetectionService : Object {
                 "Maximum interval set to %d seconds (> 5 minutes)".printf (max_interval));
         }
 
-        // Check if Matrix transport was cleared
+        // Check if Matrix transport was cleared (only after setup is complete,
+        // since settings are written one-by-one during initial setup and the
+        // intermediate state would cause false positives).
         string hs_url = _settings.get_string ("matrix-homeserver-url");
         string token = _settings.get_string ("matrix-access-token");
         string room_id = _settings.get_string ("matrix-room-id");
 
-        if (hs_url == "" && token == "" && room_id == "") {
-            emit_tamper ("matrix_cleared",
-                "All Matrix transport settings have been cleared");
-        } else if (hs_url == "" || token == "" || room_id == "") {
-            emit_tamper ("matrix_incomplete",
-                "Matrix transport settings are partially cleared (transport broken)");
+        if (_settings_were_locked) {
+            if (hs_url == "" && token == "" && room_id == "") {
+                emit_tamper ("matrix_cleared",
+                    "All Matrix transport settings have been cleared");
+            } else if (hs_url == "" || token == "" || room_id == "") {
+                emit_tamper ("matrix_incomplete",
+                    "Matrix transport settings are partially cleared (transport broken)");
+            }
         }
 
         // Check if service timers have been set dangerously high.
@@ -408,11 +436,16 @@ public class Vigil.Services.TamperDetectionService : Object {
             return;
         }
 
-        // If settings were previously locked (hash exists) but lock flag cleared
         var hash = _settings.get_string ("unlock-code-hash");
         var locked = _settings.get_boolean ("settings-locked");
 
-        if (hash != "" && !locked) {
+        // Track lock state to avoid false positives during initial setup
+        if (locked) {
+            _settings_were_locked = true;
+        }
+
+        // Only alert if we previously observed settings as locked and they got unlocked
+        if (_settings_were_locked && hash != "" && !locked) {
             emit_tamper ("settings_unlocked",
                 "Settings lock was disabled (unlock code may have been bypassed)");
         }
@@ -520,11 +553,10 @@ public class Vigil.Services.TamperDetectionService : Object {
             watch_directory (pending_dir, "marker");
         }
 
-        // Watch crypto directory
-        var effective_crypto_dir = crypto_dir != "" ? crypto_dir : SecurityUtils.get_crypto_dir ();
-        if (FileUtils.test (effective_crypto_dir, FileTest.IS_DIR)) {
-            watch_directory (effective_crypto_dir, "crypto");
-        }
+        // Note: the crypto directory is NOT monitored via inotify because
+        // GLib's atomic file writes (used by write_secure_file) create
+        // temp files that trigger spurious DELETE events on every pickle
+        // save. Crypto integrity is verified via periodic checks instead.
     }
 
     /**
@@ -666,13 +698,21 @@ public class Vigil.Services.TamperDetectionService : Object {
             return;
         }
 
-        // Crypto directory: any change or deletion is suspicious
+        // Crypto directory: only alert on deletion of KNOWN crypto files.
+        // GLib's atomic writes create temp files (e.g. "account.pickle.Q5OUK3")
+        // that get renamed -- the temp file deletion triggers inotify. Ignore
+        // these by only matching exact known filenames.
         if (category == "crypto") {
-            if (event == FileMonitorEvent.CHANGED || event == FileMonitorEvent.DELETED) {
-                emit_tamper ("crypto_file_tampered",
-                    "Crypto file %s was %s".printf (
-                        Path.get_basename (path),
-                        event == FileMonitorEvent.DELETED ? "deleted" : "modified"));
+            if (event == FileMonitorEvent.DELETED) {
+                var basename = Path.get_basename (path);
+                if (basename == "account.pickle" ||
+                    basename == "megolm_outbound.pickle" ||
+                    basename == "pickle_key" ||
+                    basename == "access_token" ||
+                    basename == "binary_hash") {
+                    emit_tamper ("crypto_file_tampered",
+                        "Crypto file %s was deleted".printf (basename));
+                }
             }
             return;
         }

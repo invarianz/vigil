@@ -125,7 +125,6 @@ void test_config_hash_changes_on_setting_change () {
 
 void test_settings_sanity_monitoring_disabled () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
-    settings.set_boolean ("monitoring-enabled", false);
     // Set Matrix settings so matrix_cleared / partner_changed don't also fire
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
@@ -141,6 +140,13 @@ void test_settings_sanity_monitoring_disabled () {
         }
     });
 
+    // Monitoring must be seen as active first, then disabled
+    settings.set_boolean ("monitoring-enabled", true);
+    svc.check_settings_sanity ();
+    assert_true (first_event == null);
+
+    // Now disable — fires because monitoring was previously active
+    settings.set_boolean ("monitoring-enabled", false);
     svc.check_settings_sanity ();
     assert_true (first_event == "monitoring_disabled");
 }
@@ -176,15 +182,24 @@ void test_settings_sanity_matrix_cleared () {
     settings.set_boolean ("monitoring-enabled", true);
     settings.set_int ("min-interval-seconds", 30);
     settings.set_int ("max-interval-seconds", 120);
+    // First observe settings as locked (setup was complete)
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+    svc.check_settings_sanity (); // observe locked state
+
+    // Now simulate attacker clearing matrix settings
     settings.set_string ("matrix-homeserver-url", "");
     settings.set_string ("matrix-access-token", "");
     settings.set_string ("matrix-room-id", "");
 
-    var svc = new Vigil.Services.TamperDetectionService (settings);
-
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => {
-        event_type = t;
+        if (t == "matrix_cleared") event_type = t;
     });
 
     svc.check_settings_sanity ();
@@ -196,15 +211,22 @@ void test_settings_sanity_matrix_incomplete () {
     settings.set_boolean ("monitoring-enabled", true);
     settings.set_int ("min-interval-seconds", 30);
     settings.set_int ("max-interval-seconds", 120);
+    // First observe settings as locked (setup was complete)
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
-    settings.set_string ("matrix-access-token", "");
+    settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
+    svc.check_settings_sanity (); // observe locked state
+
+    // Now simulate attacker partially clearing matrix settings
+    settings.set_string ("matrix-access-token", "");
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => {
-        event_type = t;
+        if (t == "matrix_incomplete") event_type = t;
     });
 
     svc.check_settings_sanity ();
@@ -239,9 +261,6 @@ void test_binary_integrity_no_baseline () {
 
 void test_settings_lock_bypass_detected () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
-    // Simulate: lock was active (hash exists) but lock flag was cleared via CLI
-    settings.set_string ("unlock-code-hash", "somehash");
-    settings.set_boolean ("settings-locked", false);
     settings.set_boolean ("monitoring-enabled", true);
     settings.set_int ("min-interval-seconds", 30);
     settings.set_int ("max-interval-seconds", 120);
@@ -258,11 +277,20 @@ void test_settings_lock_bypass_detected () {
         }
     });
 
+    // First: settings must be seen as locked
+    settings.set_string ("unlock-code-hash", "somehash");
+    settings.set_boolean ("settings-locked", true);
+    svc.check_settings_lock ();
+    assert_true (event_type == null);
+
+    // Now simulate bypass: lock flag cleared via CLI while hash still exists
+    settings.set_boolean ("settings-locked", false);
     svc.check_settings_lock ();
     assert_true (event_type == "settings_unlocked");
 
     // Cleanup
     settings.set_string ("unlock-code-hash", "");
+    settings.set_boolean ("settings-locked", false);
 }
 
 void test_settings_lock_hash_cleared_detected () {
