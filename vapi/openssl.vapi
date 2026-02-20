@@ -94,6 +94,16 @@ namespace OpenSSL {
                        void* data, size_t data_len,
                        void* md, out uint md_len);
 
+    /* ───── Random Number Generation ───── */
+
+    /**
+     * Generate cryptographic random bytes using OpenSSL's CSPRNG.
+     * Uses hardware RDRAND/RDSEED when available via the engine.
+     * Returns 1 on success, 0 on failure.
+     */
+    [CCode (cname = "RAND_bytes", cheader_filename = "openssl/rand.h")]
+    public int rand_bytes ([CCode (array_length = false)] uint8[] buf, int num);
+
     /* ───── Key Derivation (PBKDF2) ───── */
 
     /**

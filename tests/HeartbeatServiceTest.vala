@@ -267,6 +267,65 @@ void test_environment_attestation_empty_omitted () {
     assert_false (msg.contains ("env:"));
 }
 
+void test_gap_fires_tamper_event () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.interval_seconds = 1;
+
+    svc.start ();
+    svc.stop ();
+
+    // Wait >2x the interval to trigger gap detection
+    Thread.usleep (3000000);
+
+    bool signal_fired = false;
+    int64 reported_gap = 0;
+    svc.gap_detected.connect ((gap) => {
+        signal_fired = true;
+        reported_gap = gap;
+    });
+
+    var msg = svc.build_heartbeat_message ();
+    assert_true (msg.contains ("ALERT"));
+    assert_true (msg.contains ("unmonitored gap"));
+    assert_true (msg.contains ("Tamper events:"));
+    assert_true (msg.contains ("unmonitored_gap"));
+    assert_true (signal_fired);
+    assert_true (reported_gap >= 2);
+}
+
+void test_gap_no_downplay_language () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.interval_seconds = 1;
+
+    svc.start ();
+    svc.stop ();
+
+    // Wait >2x the interval
+    Thread.usleep (3000000);
+
+    var msg = svc.build_heartbeat_message ();
+    assert_false (msg.contains ("this is normal"));
+}
+
+void test_capture_digest_in_message () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    svc.record_capture_hash ("aaaa");
+    svc.record_capture_hash ("bbbb");
+
+    var msg = svc.build_heartbeat_message ();
+    assert_true (msg.contains ("captures: 2"));
+    assert_true (msg.contains ("digest:"));
+}
+
+void test_capture_digest_absent_when_no_captures () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    var msg = svc.build_heartbeat_message ();
+    assert_false (msg.contains ("captures:"));
+    assert_false (msg.contains ("digest:"));
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -312,6 +371,14 @@ public static int main (string[] args) {
         test_environment_attestation_in_first_heartbeat);
     Test.add_func ("/heartbeat/attestation_empty_omitted",
         test_environment_attestation_empty_omitted);
+    Test.add_func ("/heartbeat/gap_fires_tamper_event",
+        test_gap_fires_tamper_event);
+    Test.add_func ("/heartbeat/gap_no_downplay_language",
+        test_gap_no_downplay_language);
+    Test.add_func ("/heartbeat/capture_digest_in_message",
+        test_capture_digest_in_message);
+    Test.add_func ("/heartbeat/capture_digest_absent_no_captures",
+        test_capture_digest_absent_when_no_captures);
 
     return Test.run ();
 }

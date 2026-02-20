@@ -133,6 +133,8 @@ public class Vigil.Services.TamperDetectionService : Object {
         check_systemd_service ();
         check_settings_sanity ();
         check_binary_integrity ();
+        check_dumpable ();
+        check_display_service ();
         check_capture_liveness ();
         check_orphan_screenshots ();
     }
@@ -550,6 +552,65 @@ public class Vigil.Services.TamperDetectionService : Object {
         emit_tamper (event_type, details);
     }
 
+    /** PID of the display service (Portal/compositor). 0 = unconfigured. */
+    public uint32 display_service_pid { get; set; default = 0; }
+
+    /** Executable path of the display service at registration time. */
+    public string display_service_exe { get; set; default = ""; }
+
+    /** D-Bus name of the display service (for diagnostics). */
+    public string display_service_name { get; set; default = ""; }
+
+    /**
+     * Check that the process dumpable flag hasn't been re-enabled.
+     *
+     * If an attacker re-enables PR_SET_DUMPABLE after startup hardening,
+     * this detects it, re-hardens, and fires a tamper event.
+     */
+    public void check_dumpable () {
+        var warning_msg = SecurityUtils.check_and_reharden_dumpable ();
+        if (warning_msg != null) {
+            emit_tamper ("dumpable_reactivated", warning_msg);
+        }
+    }
+
+    /**
+     * Check that the display service (Portal/compositor) is still running
+     * and hasn't been replaced by a different executable.
+     *
+     * If the PID is gone, the compositor may have crashed or been killed.
+     * If the exe changed, a fake display service may have been substituted.
+     */
+    public void check_display_service () {
+        if (display_service_pid == 0) {
+            return;
+        }
+
+        var proc_dir = "/proc/%u".printf (display_service_pid);
+        if (!FileUtils.test (proc_dir, FileTest.IS_DIR)) {
+            emit_tamper ("display_service_gone",
+                "Display service %s (PID %u) is no longer running".printf (
+                    display_service_name, display_service_pid));
+            display_service_pid = 0;
+            return;
+        }
+
+        var exe_link = "%s/exe".printf (proc_dir);
+        try {
+            var current_exe = FileUtils.read_link (exe_link);
+            if (display_service_exe != "" && current_exe != display_service_exe) {
+                emit_tamper ("display_service_replaced",
+                    "Display service %s (PID %u) exe changed from %s to %s".printf (
+                        display_service_name, display_service_pid,
+                        display_service_exe, current_exe));
+            }
+        } catch (Error e) {
+            // Cannot read exe link -- process may have exited between checks
+            debug ("Could not read exe for display service PID %u: %s",
+                display_service_pid, e.message);
+        }
+    }
+
     /**
      * Emit a tamper event for E2EE initialization failure.
      * Called by the daemon when E2EE was configured but failed to start.
@@ -644,26 +705,8 @@ public class Vigil.Services.TamperDetectionService : Object {
         tamper_detected (event_type, details);
     }
 
-    /**
-     * Compute a jittered interval for the next tamper check.
-     *
-     * Adds random jitter of 75%-125% of the base interval using CSPRNG,
-     * so an attacker cannot predict when the next check will run and
-     * time modifications to fall between checks.
-     */
     private int get_jittered_interval () {
-        int base_interval = check_interval_seconds;
-        int min_val = base_interval * 3 / 4;
-        int max_val = base_interval * 5 / 4;
-
-        if (min_val >= max_val) {
-            return base_interval;
-        }
-
-        int range = max_val - min_val;
-        uint32 rand_val = SecurityUtils.csprng_uint32 ();
-
-        return min_val + (int) (rand_val % (range + 1));
+        return SecurityUtils.jittered_interval (check_interval_seconds);
     }
 
     private void schedule_next () {

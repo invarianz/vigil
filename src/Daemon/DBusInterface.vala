@@ -217,9 +217,26 @@ public class Vigil.Daemon.DBusServer : Object {
             _tamper_svc.daemon_binary_path = binary_path;
             _tamper_svc.expected_binary_hash = binary_hash;
 
-            // Cross-session detection: compare with previously stored hash
-            var data_dir = Vigil.Services.SecurityUtils.get_app_data_dir ();
-            var hash_file = Path.build_filename (data_dir, "binary_hash");
+            // Cross-session detection: compare with previously stored hash.
+            // Store in crypto/ dir so inotify watches catch tampering.
+            var hash_file = Path.build_filename (
+                Vigil.Services.SecurityUtils.get_crypto_dir (), "binary_hash");
+
+            // Migrate from old location (app_data_dir) if needed
+            var old_hash_file = Path.build_filename (
+                Vigil.Services.SecurityUtils.get_app_data_dir (), "binary_hash");
+            if (!FileUtils.test (hash_file, FileTest.EXISTS) &&
+                FileUtils.test (old_hash_file, FileTest.EXISTS)) {
+                try {
+                    string old_contents;
+                    FileUtils.get_contents (old_hash_file, out old_contents);
+                    Vigil.Services.SecurityUtils.write_secure_file (hash_file, old_contents);
+                    FileUtils.remove (old_hash_file);
+                } catch (Error migrate_err) {
+                    debug ("Could not migrate binary_hash: %s", migrate_err.message);
+                }
+            }
+
             if (FileUtils.test (hash_file, FileTest.EXISTS)) {
                 string stored_hash;
                 FileUtils.get_contents (hash_file, out stored_hash);
@@ -242,6 +259,9 @@ public class Vigil.Daemon.DBusServer : Object {
         }
 
         yield _screenshot_svc.initialize ();
+
+        // Record display service PID for tamper detection
+        yield record_display_service_pid ();
 
         apply_settings ();
         bind_settings ();
@@ -322,6 +342,15 @@ public class Vigil.Daemon.DBusServer : Object {
 
         _storage_svc.will_delete_file.connect ((path) => {
             _tamper_svc.expect_deletion (path);
+        });
+
+        _storage_svc.capture_hashed.connect ((hash) => {
+            _heartbeat_svc.record_capture_hash (hash);
+        });
+
+        _heartbeat_svc.gap_detected.connect ((gap_seconds) => {
+            _tamper_svc.report_tamper ("unmonitored_gap",
+                "Device was unmonitored for %lld minutes".printf (gap_seconds / 60));
         });
 
         _heartbeat_svc.heartbeat_sent.connect (() => {
@@ -431,6 +460,77 @@ public class Vigil.Daemon.DBusServer : Object {
         } else {
             warning ("E2EE initialization failed");
         }
+    }
+
+    /**
+     * Get the UNIX process ID of a D-Bus name owner.
+     *
+     * Calls org.freedesktop.DBus.GetConnectionUnixProcessID.
+     * Returns 0 if the name is not owned or the call fails.
+     */
+    private async uint32 get_dbus_name_pid (string bus_name) {
+        try {
+            var conn = GLib.Bus.get_sync (BusType.SESSION);
+            var result = yield conn.call (
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "GetConnectionUnixProcessID",
+                new Variant ("(s)", bus_name),
+                new VariantType ("(u)"),
+                DBusCallFlags.NONE,
+                5000,
+                null
+            );
+            uint32 pid;
+            result.get ("(u)", out pid);
+            return pid;
+        } catch (Error e) {
+            debug ("Could not get PID for %s: %s", bus_name, e.message);
+            return 0;
+        }
+    }
+
+    /**
+     * Record the display service PID for tamper detection.
+     *
+     * Looks up the D-Bus service backing the screenshot backend and
+     * records its PID and exe path so periodic checks can detect if
+     * it disappears or gets replaced.
+     */
+    private async void record_display_service_pid () {
+        var backend = _screenshot_svc.active_backend_name;
+        if (backend == null) {
+            return;
+        }
+
+        string? bus_name = null;
+        if (backend == "Portal") {
+            bus_name = "org.freedesktop.portal.Desktop";
+        } else if (backend == "Gala") {
+            bus_name = "org.pantheon.gala";
+        }
+
+        if (bus_name == null) {
+            return;
+        }
+
+        var pid = yield get_dbus_name_pid (bus_name);
+        if (pid == 0) {
+            return;
+        }
+
+        string exe = "";
+        try {
+            exe = FileUtils.read_link ("/proc/%u/exe".printf (pid));
+        } catch (Error e) {
+            debug ("Could not read exe for PID %u: %s", pid, e.message);
+        }
+
+        _tamper_svc.display_service_pid = pid;
+        _tamper_svc.display_service_exe = exe;
+        _tamper_svc.display_service_name = bus_name;
+        debug ("Display service: %s PID=%u exe=%s", bus_name, pid, exe);
     }
 
     private async void handle_capture () {
@@ -571,17 +671,7 @@ public class Vigil.Daemon.DBusServer : Object {
      */
     private void schedule_background_portal_check () {
         int base_interval = _settings.get_int ("tamper-check-interval-seconds");
-        int min_val = base_interval * 3 / 4;
-        int max_val = base_interval * 5 / 4;
-
-        int interval;
-        if (min_val >= max_val) {
-            interval = base_interval;
-        } else {
-            int range = max_val - min_val;
-            uint32 rand_val = Vigil.Services.SecurityUtils.csprng_uint32 ();
-            interval = min_val + (int) (rand_val % (range + 1));
-        }
+        int interval = Vigil.Services.SecurityUtils.jittered_interval (base_interval);
 
         _background_portal_source = Timeout.add_seconds ((uint) interval, () => {
             _background_portal_source = 0;

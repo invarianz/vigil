@@ -20,6 +20,9 @@ public class Vigil.Services.StorageService : Object {
     /** Emitted before the service deletes a file, so watchers can expect it. */
     public signal void will_delete_file (string path);
 
+    /** Emitted after a capture is hashed in mark_pending, for heartbeat digest. */
+    public signal void capture_hashed (string sha256_hex);
+
     /** Maximum number of screenshots to retain locally. */
     public int max_local_screenshots { get; set; default = 100; }
 
@@ -139,6 +142,7 @@ public class Vigil.Services.StorageService : Object {
             uint8[] file_data;
             FileUtils.get_data (screenshot_path, out file_data);
             file_hash = SecurityUtils.compute_sha256_hex (file_data);
+            capture_hashed (file_hash);
         } catch (Error e) {
             // File may not exist yet in tests; not fatal -- integrity
             // check will treat empty hash as "no baseline" and accept.

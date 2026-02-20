@@ -44,6 +44,7 @@ public class Vigil.Services.HeartbeatService : Object {
 
     public signal void heartbeat_sent (DateTime timestamp);
     public signal void heartbeat_failed (string error_message);
+    public signal void gap_detected (int64 gap_seconds);
 
     /** Heartbeat interval in seconds. */
     public int interval_seconds { get; set; default = 900; }
@@ -93,6 +94,9 @@ public class Vigil.Services.HeartbeatService : Object {
     /** List of tamper events since last heartbeat. */
     private GenericArray<string> _tamper_events;
 
+    /** Capture hashes recorded since last heartbeat for digest inclusion. */
+    private GenericArray<string> _capture_hashes;
+
     private Vigil.Services.MatrixTransportService? _matrix_svc;
     private uint _timeout_source = 0;
     private bool _attestation_sent = false;
@@ -113,6 +117,7 @@ public class Vigil.Services.HeartbeatService : Object {
     construct {
         start_time = new DateTime.now_local ();
         _tamper_events = new GenericArray<string> ();
+        _capture_hashes = new GenericArray<string> ();
     }
 
     /**
@@ -122,6 +127,17 @@ public class Vigil.Services.HeartbeatService : Object {
     public void report_tamper_event (string event_description) {
         _tamper_events.add (event_description);
         persist_unsent_alerts ();
+    }
+
+    /**
+     * Record a capture hash for inclusion in the next heartbeat digest.
+     *
+     * The concatenated SHA-256 of all capture hashes is included in the
+     * Ed25519-signed heartbeat, creating an unforgeable audit trail that
+     * binds specific screenshots to specific heartbeat intervals.
+     */
+    public void record_capture_hash (string sha256_hex) {
+        _capture_hashes.add (sha256_hex);
     }
 
     /**
@@ -223,8 +239,10 @@ public class Vigil.Services.HeartbeatService : Object {
             // If elapsed is more than 2x the interval, there was a gap
             if (elapsed_sec > expected_sec * 2) {
                 var gap_min = elapsed_sec / 60;
-                sb.append_printf (" | resumed after %lldm gap" +
-                    " (device was asleep or offline, this is normal)", gap_min);
+                sb.append_printf (" | ALERT: resumed after %lldm unmonitored gap", gap_min);
+                report_tamper_event (
+                    "unmonitored_gap: Device was unmonitored for %lld minutes".printf (gap_min));
+                gap_detected (elapsed_sec);
             }
         }
 
@@ -254,6 +272,18 @@ public class Vigil.Services.HeartbeatService : Object {
                     sb.append_printf (" | sig: %s", signature);
                 }
             }
+        }
+
+        // Include capture digest: SHA-256 over concatenated capture hashes.
+        // This line is covered by the Ed25519 chain signature computed after it.
+        if (_capture_hashes.length > 0) {
+            var hash_concat = new StringBuilder ();
+            for (int i = 0; i < _capture_hashes.length; i++) {
+                hash_concat.append (_capture_hashes[i]);
+            }
+            var digest = SecurityUtils.compute_sha256_hex_string (hash_concat.str);
+            sb.append_printf ("\ncaptures: %d | digest: %s",
+                (int) _capture_hashes.length, digest);
         }
 
         // Append chain integrity signature (Ed25519 over SHA-256 of message so far)
@@ -305,6 +335,7 @@ public class Vigil.Services.HeartbeatService : Object {
             consecutive_failures = 0;
             screenshots_since_last = 0;
             _tamper_events.remove_range (0, _tamper_events.length);
+            _capture_hashes.remove_range (0, _capture_hashes.length);
             _last_heartbeat_monotonic = GLib.get_monotonic_time ();
             previous_heartbeat_hash = message_hash;
             persist_chain_state ();

@@ -775,6 +775,83 @@ void test_file_monitoring_unexpected_deletion () {
     TestUtils.delete_directory_recursive (dir);
 }
 
+void test_dumpable_no_tamper_when_hardened () {
+    // Ensure dumpable is 0 (default in hardened process)
+    Linux.prctl (Linux.PR_SET_DUMPABLE, 0);
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_dumpable ();
+    assert_true (event_type == null);
+}
+
+void test_dumpable_detects_reactivation () {
+    // Set dumpable to 1 to simulate attacker re-enabling it
+    Linux.prctl (Linux.PR_SET_DUMPABLE, 1);
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    string? event_details = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+        event_details = d;
+    });
+
+    svc.check_dumpable ();
+    assert_true (event_type == "dumpable_reactivated");
+    assert_true (event_details.contains ("re-enabled"));
+
+    // Verify it was re-hardened
+    int current = Linux.prctl (Linux.PR_GET_DUMPABLE);
+    assert_true (current == 0);
+}
+
+void test_display_service_no_alarm_unconfigured () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    // pid=0 means unconfigured (headless/CI)
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_display_service ();
+    assert_true (event_type == null);
+}
+
+void test_display_service_detects_gone_pid () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    // Use a PID that almost certainly doesn't exist
+    svc.display_service_pid = 4000000;
+    svc.display_service_name = "org.test.fake";
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_display_service ();
+    assert_true (event_type == "display_service_gone");
+    // PID should be cleared after detection
+    assert_true (svc.display_service_pid == 0);
+}
+
+void test_display_service_valid_pid () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    // Use PID 1 (init/systemd) -- guaranteed to be running
+    // We can't easily read /proc/1/exe without root, so just test that
+    // a valid running PID does not fire display_service_gone.
+    svc.display_service_pid = 1;
+    svc.display_service_name = "org.test.self";
+    // Leave exe empty so the exe-changed check is skipped
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_display_service ();
+    assert_true (event_type == null);
+}
+
 void test_file_monitoring_stop_is_safe () {
     var dir = TestUtils.make_test_dir ();
     DirUtils.create_with_parents (dir, 0755);
@@ -842,6 +919,16 @@ public static int main (string[] args) {
         test_file_monitoring_unexpected_deletion);
     Test.add_func ("/tamper/file_monitoring_stop_is_safe",
         test_file_monitoring_stop_is_safe);
+    Test.add_func ("/tamper/dumpable_no_tamper_when_hardened",
+        test_dumpable_no_tamper_when_hardened);
+    Test.add_func ("/tamper/dumpable_detects_reactivation",
+        test_dumpable_detects_reactivation);
+    Test.add_func ("/tamper/display_service_no_alarm_unconfigured",
+        test_display_service_no_alarm_unconfigured);
+    Test.add_func ("/tamper/display_service_detects_gone_pid",
+        test_display_service_detects_gone_pid);
+    Test.add_func ("/tamper/display_service_valid_pid",
+        test_display_service_valid_pid);
 
     return Test.run ();
 }
