@@ -227,8 +227,12 @@ public class Vigil.Services.HeartbeatService : Object {
 
         var sb = new StringBuilder ();
         var prev_hash = previous_heartbeat_hash != "" ? previous_heartbeat_hash : "genesis";
-        sb.append_printf ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d | seq: %lld | lifetime: %lld | prev: %s",
-            hours, minutes, screenshots_since_last, pending_upload_count, sequence_number, lifetime_captures, prev_hash);
+        sb.append_printf (
+            "Vigil active | uptime: %lldh %lldm | screenshots: %d" +
+            " | pending: %d | seq: %lld | lifetime: %lld | prev: %s",
+            hours, minutes, screenshots_since_last,
+            pending_upload_count, sequence_number,
+            lifetime_captures, prev_hash);
 
         // Detect gap (sleep/wake or network outage recovery)
         var now_mono = GLib.get_monotonic_time ();
