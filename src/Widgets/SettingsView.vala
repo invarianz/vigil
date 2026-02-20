@@ -88,11 +88,11 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         };
 
         unlock_button = new Gtk.Button.with_label ("Unlock");
-        unlock_button.add_css_class (Granite.CssClass.DESTRUCTIVE);
+        unlock_button.add_css_class ("destructive-action");
         unlock_button.clicked.connect (on_unlock_clicked);
 
         lock_button = new Gtk.Button.with_label ("Lock Settings");
-        lock_button.add_css_class (Granite.CssClass.SUGGESTED);
+        lock_button.add_css_class ("suggested-action");
         lock_button.clicked.connect (on_lock_clicked);
 
         lock_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 12) {
@@ -149,7 +149,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         setup_button = new Gtk.Button.with_label ("Setup") {
             halign = Gtk.Align.END
         };
-        setup_button.add_css_class (Granite.CssClass.SUGGESTED);
+        setup_button.add_css_class ("suggested-action");
         setup_button.clicked.connect (on_setup_clicked);
 
         status_label = new Gtk.Label ("") {

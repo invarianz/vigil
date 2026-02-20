@@ -146,9 +146,9 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
     public void set_pending_count (int count) {
         pending_uploads_label.label = count.to_string ();
         if (count > 10) {
-            pending_uploads_label.add_css_class (Granite.CssClass.WARNING);
+            pending_uploads_label.add_css_class ("warning");
         } else {
-            pending_uploads_label.remove_css_class (Granite.CssClass.WARNING);
+            pending_uploads_label.remove_css_class ("warning");
         }
     }
 
