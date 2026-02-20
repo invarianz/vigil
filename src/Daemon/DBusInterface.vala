@@ -467,7 +467,10 @@ public class Vigil.Daemon.DBusServer : Object {
         enc.device_id = device_id;
         enc.user_id = user_id;
 
-        if (enc.initialize (pickle_key)) {
+        // restore_only: daemon must not create new Olm accounts — the GUI
+        // does that during setup. If the pickle isn't written yet (race with
+        // GUI), we retry shortly.
+        if (enc.initialize (pickle_key, true)) {
             enc.restore_group_session ();
             // Wire up encryption for config hash signing in heartbeats
             _heartbeat_svc.encryption = enc;
@@ -477,7 +480,11 @@ public class Vigil.Daemon.DBusServer : Object {
             _room_keys_shared = false;
             schedule_key_sharing ();
         } else {
-            warning ("E2EE initialization failed");
+            debug ("E2EE pickle not ready, will retry in 5s");
+            Timeout.add_seconds (5, () => {
+                initialize_encryption ();
+                return Source.REMOVE;
+            });
         }
     }
 

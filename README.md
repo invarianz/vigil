@@ -84,9 +84,7 @@ Your partner only needs to watch for three things:
 
 ### Step 3: Settings are locked automatically
 
-After setup, Vigil locks all settings and sends a 6-character unlock code to your partner:
-
-> Settings are now locked. Unlock code: A7KM3P -- Keep this code. The user will need it from you to change any settings.
+After setup, Vigil locks all settings behind a 6-character unlock code. The code is shown once in the Vigil GUI -- write it down or tell your partner directly (in person, by phone, or through another chat). Vigil does **not** send the code through Matrix, because that would let the monitored user read it.
 
 To change settings later, you'll need to ask your partner for the code. If someone tries to bypass the lock through system tools, a tamper alert fires immediately.
 
@@ -100,27 +98,27 @@ Vigil communicates with your partner through different types of messages. Here's
 
 ### Normal operation
 
-> Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0 | next check-in by: 14:35
+> Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0 | seq: 10 | lifetime: 150 | prev: a3b8f1… | next check-in by: 14:35
 
-This is a regular heartbeat, sent every 15 minutes. It tells your partner everything is running smoothly. The "next check-in by" time is the deadline -- if no new message arrives by then, something may be wrong.
+This is a regular heartbeat, sent every 15 minutes. It tells your partner everything is running smoothly. The `seq` number increments with each heartbeat, `lifetime` counts total screenshots ever taken, and `prev` is a hash chain linking to the previous heartbeat (so messages can't be silently deleted). The "next check-in by" time is the deadline -- if no new message arrives by then, something may be wrong.
 
 ### Clean shutdown (computer turned off or restarted)
 
 > STATUS: Vigil going offline (clean shutdown, this is normal) | uptime was: 4h 12m | pending: 0
 
-When you shut down or restart your computer, Vigil sends this message before it stops. Your partner knows the silence that follows is expected and not suspicious. When your computer starts up again, the next heartbeat will mention the gap:
+When you shut down or restart your computer, Vigil sends this message before it stops. Your partner knows the silence that follows is expected and not suspicious. When your computer starts up again, the next heartbeat will report the gap as an alert:
 
-> Vigil active | uptime: 0h 1m | screenshots: 0 | pending: 0 | resumed after 8h 15m gap (device was asleep or offline, this is normal) | next check-in by: 08:20
+> Vigil active | uptime: 0h 1m | … | ALERT: resumed after 495m unmonitored gap | next check-in by: 08:20
 
-### Sleep and wake
+### Sleep, wake, and unmonitored gaps
 
-If your computer was asleep (lid closed, suspended), the next heartbeat reports exactly how long the gap was. Your partner can see the gap duration and judge whether it makes sense (e.g. overnight sleep vs. suspicious midday silence).
+Any gap longer than twice the heartbeat interval (including sleep, suspend, or SIGSTOP attacks) fires an `unmonitored_gap` tamper event. Your partner can see the gap duration and judge whether it makes sense (e.g. overnight sleep vs. suspicious midday silence).
 
 ### Network outage
 
 If Vigil can't reach the server, it keeps trying. Once the connection is restored, the heartbeat reports how many check-ins were missed:
 
-> Vigil active | uptime: 3h 0m | screenshots: 12 | pending: 5 | recovering: 3 heartbeats were missed | next check-in by: 15:45
+> Vigil active | uptime: 3h 0m | screenshots: 12 | pending: 5 | seq: 15 | lifetime: 80 | prev: f7c2e0… | recovering: 3 heartbeats were missed | next check-in by: 15:45
 
 Screenshots taken while offline are queued and delivered as soon as the connection comes back.
 
@@ -156,13 +154,17 @@ These alerts fire when:
 | `disk_space_low` | Less than 50 MB disk space remaining; screenshots cannot be stored |
 | `screenshot_tampered` | A screenshot file was modified after capture (integrity hash mismatch) |
 | `capture_counter_tampered` | The lifetime capture counter file was modified (HMAC mismatch) |
-| `e2ee_init_failed` | Encryption failed to start -- screenshots would be sent unencrypted, so monitoring is refused |
+| `e2ee_init_failed` | Encryption failed to start -- screenshots are queued locally until E2EE recovers |
 | `background_permission_revoked` | Background running/autostart permission was revoked |
 | `ld_preload_detected` | LD_PRELOAD environment variable is set (possible library injection) |
 | `prctl_failed` | Failed to disable process core dumps/ptrace (process hardening failed) |
 | `screenshot_deleted` | A screenshot file was unexpectedly deleted (not by the daemon) |
 | `marker_deleted` | A pending upload marker was unexpectedly deleted (not by the daemon) |
-| `crypto_file_tampered` | A file in the crypto directory was modified or deleted |
+| `crypto_file_tampered` | A file in the crypto directory was deleted |
+| `unmonitored_gap` | Device was unmonitored for longer than expected (sleep, suspend, or attack) |
+| `dumpable_reactivated` | Process dumpable flag was re-enabled (possible ptrace/memory attack) |
+| `display_service_gone` | The screenshot compositor process disappeared |
+| `display_service_replaced` | The screenshot compositor was replaced with a different binary |
 
 ### Forced kill or uninstall
 
@@ -199,7 +201,7 @@ Vigil runs as two processes:
 
 ### What happens when a screenshot is taken
 
-1. The screen is captured via XDG Desktop Portal (Wayland) or Gala D-Bus (X11)
+1. The screen is captured via Gala D-Bus on the desktop, or XDG Desktop Portal inside Flatpak
 2. The PNG is encrypted with a fresh random AES-256-CTR key and IV, then a SHA-256 hash of the ciphertext is computed for integrity verification
 3. The encrypted blob is uploaded to the Matrix content repository
 4. The event JSON (containing the download URL, decryption key, IV, and hash) is encrypted with the room's Megolm session

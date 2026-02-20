@@ -73,7 +73,7 @@ public class Vigil.Services.EncryptionService : Object {
      * @param pickle_key The user's E2EE password used to encrypt state at rest.
      * @return true if initialization succeeded.
      */
-    public bool initialize (string pickle_key) {
+    public bool initialize (string pickle_key, bool restore_only = false) {
         _pickle_key = pickle_key;
 
         // Ensure crypto directory exists with restrictive permissions (0700)
@@ -93,6 +93,9 @@ public class Vigil.Services.EncryptionService : Object {
                 return true;
             }
             warning ("Failed to restore OlmAccount, creating new one");
+        } else if (restore_only) {
+            debug ("No account pickle found (restore_only), skipping");
+            return false;
         }
 
         // Create new account

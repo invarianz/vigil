@@ -899,7 +899,9 @@ public class Vigil.Services.MatrixTransportService : Object {
         builder.set_member_name ("msgtype");
         builder.add_string_value ("m.image");
         builder.set_member_name ("body");
-        builder.add_string_value (body);
+        builder.add_string_value (filename);
+        builder.set_member_name ("filename");
+        builder.add_string_value (filename);
 
         // "file" object replaces "url" for encrypted attachments
         builder.set_member_name ("file");
