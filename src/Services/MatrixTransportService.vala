@@ -1058,21 +1058,7 @@ public class Vigil.Services.MatrixTransportService : Object {
      * Load an access token from the secure file, or return null.
      */
     public static string? load_access_token_from_file () {
-        var path = Path.build_filename (SecurityUtils.get_crypto_dir (), "access_token");
-
-        if (!FileUtils.test (path, FileTest.EXISTS)) {
-            return null;
-        }
-
-        try {
-            string contents;
-            FileUtils.get_contents (path, out contents);
-            var stripped = contents.strip ();
-            return stripped != "" ? stripped : null;
-        } catch (Error e) {
-            warning ("Failed to read access token from file: %s", e.message);
-            return null;
-        }
+        return SecurityUtils.load_secure_file_string ("access_token");
     }
 
     /**
@@ -1159,6 +1145,9 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             partner_devices.foreach_member ((obj, dev_id, dev_node) => {
                 var dev = dev_node.get_object ();
+                if (dev == null) {
+                    return;
+                }
                 if (dev.has_member ("keys")) {
                     var keys = dev.get_object_member ("keys");
                     var curve_key_name = "curve25519:%s".printf (dev_id);
@@ -1217,13 +1206,16 @@ public class Vigil.Services.MatrixTransportService : Object {
             int shared_count = 0;
             partner_otks.foreach_member ((obj, dev_id, otk_node) => {
                 var otk_container = otk_node.get_object ();
+                if (otk_container == null) {
+                    return;
+                }
 
                 // Find the claimed key
                 string? claimed_key = null;
                 otk_container.foreach_member ((inner_obj, key_name, key_val) => {
                     if (key_name.has_prefix ("signed_curve25519:")) {
                         var key_obj = key_val.get_object ();
-                        if (key_obj.has_member ("key")) {
+                        if (key_obj != null && key_obj.has_member ("key")) {
                             claimed_key = key_obj.get_string_member ("key");
                         }
                     }

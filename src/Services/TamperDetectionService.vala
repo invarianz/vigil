@@ -41,6 +41,9 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Path to the pending markers directory (for orphan detection). */
     public string pending_dir { get; set; default = ""; }
 
+    /** Path to the crypto directory (for file monitoring). Empty = auto-detect. */
+    public string crypto_dir { get; set; default = ""; }
+
     /** Maximum capture interval in seconds (for liveness monitoring). */
     public int max_capture_interval_seconds { get; set; default = 120; }
 
@@ -256,13 +259,8 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Check that the autostart desktop file exists and hasn't been tampered with.
      */
     public void check_autostart_entry () {
-        if (!FileUtils.test (autostart_desktop_path, FileTest.EXISTS)) {
-            emit_tamper ("autostart_missing",
-                "Autostart desktop entry is missing: %s".printf (autostart_desktop_path));
-            return;
-        }
-
-        // Check that the Exec line points to the right binary
+        // Single syscall: attempt to read directly, handle missing via exception.
+        // Avoids a redundant stat() before the open().
         try {
             string contents;
             FileUtils.get_contents (autostart_desktop_path, out contents);
@@ -270,6 +268,9 @@ public class Vigil.Services.TamperDetectionService : Object {
                 emit_tamper ("autostart_modified",
                     "Autostart entry does not reference the daemon binary");
             }
+        } catch (FileError.NOENT e) {
+            emit_tamper ("autostart_missing",
+                "Autostart desktop entry is missing: %s".printf (autostart_desktop_path));
         } catch (Error e) {
             emit_tamper ("autostart_unreadable",
                 "Cannot read autostart entry: %s".printf (e.message));
@@ -518,9 +519,9 @@ public class Vigil.Services.TamperDetectionService : Object {
         }
 
         // Watch crypto directory
-        var crypto_dir = SecurityUtils.get_crypto_dir ();
-        if (FileUtils.test (crypto_dir, FileTest.IS_DIR)) {
-            watch_directory (crypto_dir, "crypto");
+        var effective_crypto_dir = crypto_dir != "" ? crypto_dir : SecurityUtils.get_crypto_dir ();
+        if (FileUtils.test (effective_crypto_dir, FileTest.IS_DIR)) {
+            watch_directory (effective_crypto_dir, "crypto");
         }
     }
 

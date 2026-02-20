@@ -211,9 +211,8 @@ public class Vigil.Services.HeartbeatService : Object {
 
         var sb = new StringBuilder ();
         var prev_hash = previous_heartbeat_hash != "" ? previous_heartbeat_hash : "genesis";
-        sb.append ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d | seq: %lld | lifetime: %lld | prev: %s".printf (
-            hours, minutes, screenshots_since_last, pending_upload_count, sequence_number, lifetime_captures, prev_hash
-        ));
+        sb.append_printf ("Vigil active | uptime: %lldh %lldm | screenshots: %d | pending: %d | seq: %lld | lifetime: %lld | prev: %s",
+            hours, minutes, screenshots_since_last, pending_upload_count, sequence_number, lifetime_captures, prev_hash);
 
         // Detect gap (sleep/wake or network outage recovery)
         var now_mono = GLib.get_monotonic_time ();
@@ -224,36 +223,35 @@ public class Vigil.Services.HeartbeatService : Object {
             // If elapsed is more than 2x the interval, there was a gap
             if (elapsed_sec > expected_sec * 2) {
                 var gap_min = elapsed_sec / 60;
-                var gap_msg = " | resumed after %lldm gap".printf (gap_min) +
-                    " (device was asleep or offline, this is normal)";
-                sb.append (gap_msg);
+                sb.append_printf (" | resumed after %lldm gap" +
+                    " (device was asleep or offline, this is normal)", gap_min);
             }
         }
 
         // Report recovery from consecutive failures
         if (consecutive_failures > 0) {
-            sb.append (" | recovering: %d heartbeats were missed".printf (consecutive_failures));
+            sb.append_printf (" | recovering: %d heartbeats were missed", consecutive_failures);
         }
 
         // Tell the partner when to expect the next check-in.
         // If this deadline passes without a new message, something is wrong.
         // Use 2x interval to allow for timing jitter and network delays.
         var deadline = new DateTime.now_local ().add_seconds (interval_seconds * 2);
-        sb.append (" | next check-in by: %s".printf (deadline.format ("%H:%M")));
+        sb.append_printf (" | next check-in by: %s", deadline.format ("%H:%M"));
 
         // Include environment attestation in the first heartbeat only
         if (!_attestation_sent && environment_attestation != "") {
-            sb.append ("\nenv: %s".printf (environment_attestation));
+            sb.append_printf ("\nenv: %s", environment_attestation);
             _attestation_sent = true;
         }
 
         // Include config hash with optional Ed25519 signature
         if (config_hash != "") {
-            sb.append ("\nconfig: %s".printf (config_hash));
+            sb.append_printf ("\nconfig: %s", config_hash);
             if (encryption != null && encryption.is_ready) {
                 var signature = encryption.sign_string (config_hash);
                 if (signature != "") {
-                    sb.append (" | sig: %s".printf (signature));
+                    sb.append_printf (" | sig: %s", signature);
                 }
             }
         }
@@ -263,7 +261,7 @@ public class Vigil.Services.HeartbeatService : Object {
             var chain_hash = SecurityUtils.compute_sha256_hex_string (sb.str);
             var chain_sig = encryption.sign_string (chain_hash);
             if (chain_sig != "") {
-                sb.append ("\nchain: %s | sig: %s".printf (chain_hash, chain_sig));
+                sb.append_printf ("\nchain: %s | sig: %s", chain_hash, chain_sig);
             }
         }
 
@@ -272,8 +270,8 @@ public class Vigil.Services.HeartbeatService : Object {
         if (_tamper_events.length > 0) {
             int start = int.max (0, (int) _tamper_events.length - 50);
             if (start > 0) {
-                sb.append ("\nTamper events (%d total, showing last 50):".printf (
-                    (int) _tamper_events.length));
+                sb.append_printf ("\nTamper events (%d total, showing last 50):",
+                    (int) _tamper_events.length);
             } else {
                 sb.append ("\nTamper events:");
             }

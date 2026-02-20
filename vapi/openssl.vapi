@@ -81,6 +81,19 @@ namespace OpenSSL {
                        Md type,
                        void* engine = null);
 
+    /* ───── HMAC ───── */
+
+    /**
+     * One-shot HMAC: compute HMAC of data with key.
+     * Returns pointer to md (same as md parameter), or null on failure.
+     * md must be at least EVP_MAX_MD_SIZE (64) bytes.
+     */
+    [CCode (cname = "HMAC", cheader_filename = "openssl/hmac.h")]
+    public void* hmac (Md evp_md,
+                       void* key, int key_len,
+                       void* data, size_t data_len,
+                       void* md, out uint md_len);
+
     /* ───── Key Derivation (PBKDF2) ───── */
 
     /**

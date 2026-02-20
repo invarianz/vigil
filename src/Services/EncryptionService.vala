@@ -867,21 +867,7 @@ public class Vigil.Services.EncryptionService : Object {
      * Load the pickle key from the secure file, or return null.
      */
     public static string? load_pickle_key_from_file () {
-        var path = Path.build_filename (SecurityUtils.get_crypto_dir (), "pickle_key");
-
-        if (!FileUtils.test (path, FileTest.EXISTS)) {
-            return null;
-        }
-
-        try {
-            string contents;
-            FileUtils.get_contents (path, out contents);
-            var stripped = contents.strip ();
-            return stripped != "" ? stripped : null;
-        } catch (Error e) {
-            warning ("Failed to read pickle key from file: %s", e.message);
-            return null;
-        }
+        return SecurityUtils.load_secure_file_string ("pickle_key");
     }
 
     /**

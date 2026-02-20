@@ -703,12 +703,10 @@ void test_binary_integrity_missing () {
 void test_file_monitoring_expected_deletion () {
     var dir = TestUtils.make_test_dir ();
     DirUtils.create_with_parents (dir, 0755);
-    // Isolate crypto dir so inotify doesn't watch the real user dir
-    // (avoids race conditions when parallel test binaries modify crypto files)
-    Environment.set_variable ("XDG_DATA_HOME", dir, true);
-    Vigil.Services.SecurityUtils.reset_cached_paths ();
     var screenshots = Path.build_filename (dir, "screenshots");
     DirUtils.create_with_parents (screenshots, 0755);
+    var crypto = Path.build_filename (dir, "crypto");
+    DirUtils.create_with_parents (crypto, 0755);
 
     // Create a file to delete
     var file_path = Path.build_filename (screenshots, "test.png");
@@ -717,6 +715,7 @@ void test_file_monitoring_expected_deletion () {
     var svc = new Vigil.Services.TamperDetectionService (null);
     svc.screenshots_dir = screenshots;
     svc.pending_dir = Path.build_filename (dir, "pending");
+    svc.crypto_dir = crypto;
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
@@ -743,10 +742,10 @@ void test_file_monitoring_expected_deletion () {
 void test_file_monitoring_unexpected_deletion () {
     var dir = TestUtils.make_test_dir ();
     DirUtils.create_with_parents (dir, 0755);
-    Environment.set_variable ("XDG_DATA_HOME", dir, true);
-    Vigil.Services.SecurityUtils.reset_cached_paths ();
     var screenshots = Path.build_filename (dir, "screenshots");
     DirUtils.create_with_parents (screenshots, 0755);
+    var crypto = Path.build_filename (dir, "crypto");
+    DirUtils.create_with_parents (crypto, 0755);
 
     // Create a file to delete unexpectedly
     var file_path = Path.build_filename (screenshots, "unexpected.png");
@@ -755,6 +754,7 @@ void test_file_monitoring_unexpected_deletion () {
     var svc = new Vigil.Services.TamperDetectionService (null);
     svc.screenshots_dir = screenshots;
     svc.pending_dir = Path.build_filename (dir, "pending");
+    svc.crypto_dir = crypto;
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
@@ -778,10 +778,11 @@ void test_file_monitoring_unexpected_deletion () {
 void test_file_monitoring_stop_is_safe () {
     var dir = TestUtils.make_test_dir ();
     DirUtils.create_with_parents (dir, 0755);
-    Environment.set_variable ("XDG_DATA_HOME", dir, true);
-    Vigil.Services.SecurityUtils.reset_cached_paths ();
+    var crypto = Path.build_filename (dir, "crypto");
+    DirUtils.create_with_parents (crypto, 0755);
 
     var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.crypto_dir = crypto;
 
     // Double start/stop should not crash
     svc.start_file_monitoring ();

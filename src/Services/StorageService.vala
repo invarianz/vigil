@@ -286,9 +286,14 @@ public class Vigil.Services.StorageService : Object {
 
                 if (lines.length >= 2) {
                     if (FileUtils.test (lines[0], FileTest.EXISTS)) {
+                        var ts = new DateTime.from_iso8601 (lines[1], null);
+                        if (ts == null) {
+                            // Corrupted timestamp — skip this marker
+                            continue;
+                        }
                         var item = PendingScreenshot ();
                         item.file_path = lines[0];
-                        item.capture_time = new DateTime.from_iso8601 (lines[1], null);
+                        item.capture_time = ts;
                         pending.add (item);
                     } else {
                         // Screenshot file was deleted; clean up orphan marker
@@ -471,12 +476,11 @@ public class Vigil.Services.StorageService : Object {
     /**
      * Compute HMAC-SHA256 of the given data using the stored HMAC key.
      *
-     * Returns a hex-encoded HMAC digest.
+     * Uses OpenSSL for hardware-accelerated HMAC (consistent with SHA-256
+     * hot path in SecurityUtils).
      */
     private string compute_hmac (string data) {
-        var hmac = new Hmac (ChecksumType.SHA256, hmac_key.data);
-        hmac.update (data.data);
-        return hmac.get_string ();
+        return SecurityUtils.compute_hmac_sha256_hex (hmac_key, data);
     }
 }
 

@@ -56,7 +56,7 @@ public class Vigil.Daemon.DBusServer : Object {
     private Vigil.Services.MatrixTransportService _matrix_svc;
     private GLib.Settings _settings;
 
-    private GenericArray<string> _recent_tamper_events;
+    private Queue<string> _recent_tamper_events;
     private int _cached_pending_count = 0;
     private uint _batch_upload_source = 0;
     private int _batch_upload_interval = 600;
@@ -110,9 +110,12 @@ public class Vigil.Daemon.DBusServer : Object {
 
     public string[] recent_tamper_events {
         owned get {
-            string[] result = new string[_recent_tamper_events.length];
-            for (int i = 0; i < _recent_tamper_events.length; i++) {
-                result[i] = _recent_tamper_events[i];
+            var len = _recent_tamper_events.get_length ();
+            string[] result = new string[len];
+            unowned List<string> node = _recent_tamper_events.head;
+            for (uint i = 0; i < len; i++) {
+                result[i] = node.data;
+                node = node.next;
             }
             return result;
         }
@@ -140,7 +143,7 @@ public class Vigil.Daemon.DBusServer : Object {
         _tamper_svc = tamper_svc;
         _matrix_svc = matrix_svc;
         _settings = settings;
-        _recent_tamper_events = new GenericArray<string> ();
+        _recent_tamper_events = new Queue<string> ();
 
         connect_signals ();
     }
@@ -302,11 +305,12 @@ public class Vigil.Daemon.DBusServer : Object {
         });
 
         _tamper_svc.tamper_detected.connect ((event_type, details) => {
-            _heartbeat_svc.report_tamper_event ("%s: %s".printf (event_type, details));
-            _recent_tamper_events.add ("%s: %s".printf (event_type, details));
-            // Keep only last 50
-            if (_recent_tamper_events.length > 50) {
-                _recent_tamper_events.remove_index (0);
+            var event_str = "%s: %s".printf (event_type, details);
+            _heartbeat_svc.report_tamper_event (event_str);
+            _recent_tamper_events.push_tail (event_str);
+            // Keep only last 50 — O(1) pop from head vs O(n) array shift
+            if (_recent_tamper_events.get_length () > 50) {
+                _recent_tamper_events.pop_head ();
             }
             tamper_event (event_type, details);
 

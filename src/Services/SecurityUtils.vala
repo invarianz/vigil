@@ -135,10 +135,53 @@ public class Vigil.Services.SecurityUtils : Object {
     }
 
     /**
+     * Compute HMAC-SHA256 hex digest using OpenSSL (hardware-accelerated).
+     *
+     * Replaces GLib.Hmac for consistency and performance on the hot path
+     * (marker file authentication runs per-screenshot).
+     */
+    public static string compute_hmac_sha256_hex (string key, string data) {
+        var md = new uint8[32];
+        uint md_len;
+        OpenSSL.hmac (OpenSSL.sha256 (),
+            (void*) key, key.length,
+            (void*) data, data.length,
+            (void*) md, out md_len);
+        var sb = new StringBuilder.sized (64);
+        for (int i = 0; i < 32; i++) {
+            sb.append_printf ("%02x", md[i]);
+        }
+        return sb.str;
+    }
+
+    /**
      * Compute SHA-256 hex digest of a UTF-8 string.
      */
     public static string compute_sha256_hex_string (string data) {
         return compute_sha256_hex (data.data);
+    }
+
+    /**
+     * Load a secure file from the crypto directory, strip whitespace, return contents.
+     *
+     * Returns null if the file doesn't exist or is empty.
+     */
+    public static string? load_secure_file_string (string filename) {
+        var path = Path.build_filename (get_crypto_dir (), filename);
+
+        if (!FileUtils.test (path, FileTest.EXISTS)) {
+            return null;
+        }
+
+        try {
+            string contents;
+            FileUtils.get_contents (path, out contents);
+            var stripped = contents.strip ();
+            return stripped != "" ? stripped : null;
+        } catch (Error e) {
+            warning ("Failed to read %s: %s", filename, e.message);
+            return null;
+        }
     }
 
     /**
@@ -178,20 +221,23 @@ public class Vigil.Services.SecurityUtils : Object {
         var sb = new StringBuilder ();
 
         // Hostname
-        sb.append ("host: %s".printf (Environment.get_host_name ()));
+        sb.append_printf ("host: %s", Environment.get_host_name ());
 
         // Session type
         var session = Vigil.Utils.detect_session_type ();
-        sb.append (" | session: %s".printf (session.to_string ()));
+        sb.append_printf (" | session: %s", session.to_string ());
 
-        // Binary path and hash
-        sb.append (" | binary: %s".printf (binary_path));
-        sb.append (" | binary_hash: %s".printf (
-            binary_hash.length >= 16 ? binary_hash.substring (0, 16) + "\u2026" : binary_hash));
+        // Binary path and hash (truncate to 16 chars for readability)
+        sb.append_printf (" | binary: %s", binary_path);
+        if (binary_hash.length >= 16) {
+            sb.append_printf (" | binary_hash: %s\u2026", binary_hash.substring (0, 16));
+        } else {
+            sb.append_printf (" | binary_hash: %s", binary_hash);
+        }
 
         // Flatpak detection
         bool is_flatpak = FileUtils.test ("/.flatpak-info", FileTest.EXISTS);
-        sb.append (" | flatpak: %s".printf (is_flatpak ? "yes" : "no"));
+        sb.append_printf (" | flatpak: %s", is_flatpak ? "yes" : "no");
 
         // Container detection (docker/lxc/podman via cgroup)
         string container = "none";
@@ -205,7 +251,7 @@ public class Vigil.Services.SecurityUtils : Object {
         } catch (Error e) {
             // Not available -- leave as "none"
         }
-        sb.append (" | container: %s".printf (container));
+        sb.append_printf (" | container: %s", container);
 
         // PID namespace detection (NSpid in /proc/self/status)
         string pidns = "unknown";
@@ -222,7 +268,7 @@ public class Vigil.Services.SecurityUtils : Object {
         } catch (Error e) {
             // Not available
         }
-        sb.append (" | pidns: %s".printf (pidns));
+        sb.append_printf (" | pidns: %s", pidns);
 
         // Mount namespace ID
         string mntns = "unknown";
@@ -231,7 +277,7 @@ public class Vigil.Services.SecurityUtils : Object {
         } catch (Error e) {
             // Not available
         }
-        sb.append (" | mntns: %s".printf (mntns));
+        sb.append_printf (" | mntns: %s", mntns);
 
         return sb.str;
     }
