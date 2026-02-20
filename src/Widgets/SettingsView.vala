@@ -37,6 +37,8 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
 
     private Gtk.Box setup_box;
     private Gtk.Box advanced_box;
+    private Granite.HeaderLabel setup_header;
+    private Granite.HeaderLabel advanced_header;
     private Gtk.Entry unlock_entry;
     private Gtk.Button unlock_button;
     private Gtk.Button lock_button;
@@ -111,10 +113,10 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         lock_box.append (lock_button);
 
         // --- Account setup section ---
-        var setup_header = new Granite.HeaderLabel ("Account Setup");
+        setup_header = new Granite.HeaderLabel ("Account Setup");
 
         homeserver_entry = new Gtk.Entry () {
-            placeholder_text = "matrix.org",
+            placeholder_text = "e.g. matrix.org or https://matrix.example.com",
             hexpand = true
         };
         var existing_hs = settings.get_string ("matrix-homeserver-url");
@@ -183,7 +185,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         setup_box.append (status_label);
 
         // --- Advanced section (collapsed) ---
-        var advanced_header = new Granite.HeaderLabel ("Advanced");
+        advanced_header = new Granite.HeaderLabel ("Advanced");
 
         min_interval_spin = new Gtk.SpinButton.with_range (10, 120, 5);
         min_interval_spin.value = settings.get_int ("min-interval-seconds");
@@ -599,16 +601,21 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             unlock_entry.visible = true;
             unlock_button.visible = true;
             lock_button.visible = false;
-            setup_box.sensitive = false;
-            advanced_box.sensitive = false;
+            // Hide setup and advanced entirely when locked
+            setup_header.visible = false;
+            setup_box.visible = false;
+            advanced_header.visible = false;
+            advanced_box.visible = false;
         } else {
             lock_status_label.label = "Settings are unlocked. Make your changes, then lock when done.";
             lock_status_label.remove_css_class ("error");
             unlock_entry.visible = false;
             unlock_button.visible = false;
             lock_button.visible = true;
-            setup_box.sensitive = true;
-            advanced_box.sensitive = true;
+            setup_header.visible = true;
+            setup_box.visible = true;
+            advanced_header.visible = true;
+            advanced_box.visible = true;
         }
     }
 
