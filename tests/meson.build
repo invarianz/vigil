@@ -101,3 +101,17 @@ benchmark('PerformanceBenchmark', benchmark_exe,
     timeout: 120,
     env: test_env,
 )
+
+# Flatpak build check -- verifies the app compiles against the flatpak SDK.
+# Run with: meson test -C builddir --suite flatpak
+flatpak_builder = find_program('flatpak-builder', required: false)
+if flatpak_builder.found()
+    flatpak_manifest = meson.project_source_root() / 'io.github.invarianz.vigil.yml'
+    flatpak_builddir = meson.project_source_root() / 'flatpak-repo'
+
+    test('flatpak-build', flatpak_builder,
+        args: ['--force-clean', '--build-only', flatpak_builddir, flatpak_manifest],
+        suite: 'flatpak',
+        timeout: 300,
+    )
+endif

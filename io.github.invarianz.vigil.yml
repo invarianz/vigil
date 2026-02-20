@@ -1,6 +1,6 @@
 app-id: io.github.invarianz.vigil
 runtime: io.elementary.Platform
-runtime-version: '8'
+runtime-version: '8.2'
 sdk: io.elementary.Sdk
 command: io.github.invarianz.vigil
 finish-args:
@@ -21,6 +21,7 @@ modules:
     buildsystem: cmake-ninja
     config-opts:
       - '-DCMAKE_BUILD_TYPE=Release'
+      - '-DCMAKE_INSTALL_LIBDIR=lib'
     sources:
       - type: archive
         url: https://gitlab.matrix.org/matrix-org/olm/-/archive/3.2.16/olm-3.2.16.tar.gz
