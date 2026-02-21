@@ -10,10 +10,9 @@
  *   1. Owns the session bus name io.github.invarianz.vigil.Daemon
  *   2. Exports the DBusServer object on the bus
  *   3. Runs the monitoring engine (scheduler, screenshot, Matrix, E2EE, heartbeat, tamper)
- *   4. Notifies systemd watchdog periodically
  *
- * The daemon runs independently of the GUI. It is started via
- * systemd user service or XDG autostart and keeps running even
+ * The daemon runs independently of the GUI. It is started via the
+ * XDG Background portal (Flatpak autostart) and keeps running even
  * when the GUI is closed.
  */
 public class Vigil.Daemon.DaemonApp : GLib.Application {
@@ -24,7 +23,6 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
     private Vigil.Services.StorageService _storage_svc;
     private Vigil.Services.HeartbeatService _heartbeat_svc;
     private Vigil.Services.TamperDetectionService _tamper_svc;
-    private uint _watchdog_source = 0;
     private GenericArray<string> _deferred_tamper_events;
 
     public DaemonApp () {
@@ -156,8 +154,6 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
                 _screenshot_svc.active_backend_name ?? "none");
         });
 
-        // Start systemd watchdog notifications
-        start_watchdog ();
     }
 
     protected override void activate () {
@@ -181,61 +177,7 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         }
     }
 
-    /**
-     * Periodically notify the systemd watchdog that we're alive.
-     */
-    private void start_watchdog () {
-        // Check if WatchdogSec is configured
-        var watchdog_usec = Environment.get_variable ("WATCHDOG_USEC");
-        if (watchdog_usec == null) {
-            debug ("No WATCHDOG_USEC set, watchdog disabled");
-            return;
-        }
-
-        int64 usec = int64.parse (watchdog_usec);
-        if (usec <= 0) {
-            return;
-        }
-
-        // Notify at half the watchdog interval
-        uint interval_sec = (uint) (usec / 2000000);
-        if (interval_sec < 1) {
-            interval_sec = 1;
-        }
-
-        debug ("Watchdog: notifying every %u seconds", interval_sec);
-
-        // Send initial ready notification
-        try {
-            var proc = new Subprocess.newv (
-                { "systemd-notify", "--ready" },
-                SubprocessFlags.NONE
-            );
-            proc.wait (null);
-        } catch (Error e) {
-            debug ("systemd-notify --ready failed: %s", e.message);
-        }
-
-        _watchdog_source = Timeout.add_seconds (interval_sec, () => {
-            try {
-                var proc = new Subprocess.newv (
-                    { "systemd-notify", "WATCHDOG=1" },
-                    SubprocessFlags.NONE
-                );
-                proc.wait (null);
-            } catch (Error e) {
-                debug ("Watchdog notify failed: %s", e.message);
-            }
-            return Source.CONTINUE;
-        });
-    }
-
     protected override void shutdown () {
-        if (_watchdog_source != 0) {
-            Source.remove (_watchdog_source);
-            _watchdog_source = 0;
-        }
-
         // Send "going offline" notice so the partner knows silence is expected
         if (_heartbeat_svc != null) {
             // Run the async send synchronously within a brief main loop spin.

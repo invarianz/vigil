@@ -26,9 +26,6 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Whether the detection loop is running. */
     public bool is_running { get; private set; default = false; }
 
-    /** Path to the autostart desktop file. */
-    public string autostart_desktop_path { get; set; }
-
     /** Path to the screenshots directory (for orphan detection). */
     public string screenshots_dir { get; set; default = ""; }
 
@@ -68,6 +65,9 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Whether file monitoring is active. */
     private bool _file_monitoring_active = false;
 
+    /** Cached config hash (invalidated on settings change). */
+    private string? _cached_config_hash = null;
+
     /**
      * Create a TamperDetectionService.
      *
@@ -85,11 +85,6 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     construct {
-        autostart_desktop_path = Path.build_filename (
-            Environment.get_user_config_dir (),
-            "autostart",
-            "io.github.invarianz.vigil.daemon.desktop"
-        );
     }
 
     /**
@@ -129,8 +124,6 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Run all tamper detection checks. Can be called on-demand.
      */
     public void run_all_checks () {
-        check_autostart_entry ();
-        check_systemd_service ();
         check_settings_sanity ();
         check_dumpable ();
         check_tracer_pid ();
@@ -229,10 +222,18 @@ public class Vigil.Services.TamperDetectionService : Object {
     /**
      * Compute a SHA256 hash of current GSettings values that matter.
      * Used to detect config changes between heartbeats.
+     *
+     * The result is cached and invalidated when any watched setting
+     * changes (via connect_settings_signals). This eliminates 12
+     * GSettings reads + string formatting + SHA-256 on cache hits.
      */
     public string compute_config_hash () {
         if (_settings == null) {
             return "no-settings";
+        }
+
+        if (_cached_config_hash != null) {
+            return _cached_config_hash;
         }
 
         // Hash a "is-set" sentinel for the pickle key rather than the raw
@@ -254,52 +255,8 @@ public class Vigil.Services.TamperDetectionService : Object {
             _settings.get_int ("tamper-check-interval-seconds")
         );
 
-        return SecurityUtils.compute_sha256_hex_string (data);
-    }
-
-    /**
-     * Check that the autostart desktop file exists and hasn't been tampered with.
-     */
-    public void check_autostart_entry () {
-        // Single syscall: attempt to read directly, handle missing via exception.
-        // Avoids a redundant stat() before the open().
-        try {
-            string contents;
-            FileUtils.get_contents (autostart_desktop_path, out contents);
-            if (!contents.contains ("io.github.invarianz.vigil.daemon")) {
-                emit_tamper ("autostart_modified",
-                    "Autostart entry does not reference the daemon binary");
-            }
-        } catch (FileError.NOENT e) {
-            emit_tamper ("autostart_missing",
-                "Autostart desktop entry is missing: %s".printf (autostart_desktop_path));
-        } catch (Error e) {
-            emit_tamper ("autostart_unreadable",
-                "Cannot read autostart entry: %s".printf (e.message));
-        }
-    }
-
-    /**
-     * Check that the systemd user service is enabled and active.
-     */
-    public void check_systemd_service () {
-        try {
-            var enabled_proc = new Subprocess.newv (
-                { "systemctl", "--user", "is-enabled", "vigil-daemon.service" },
-                SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_MERGE
-            );
-            string stdout_buf;
-            enabled_proc.communicate_utf8 (null, null, out stdout_buf, null);
-
-            if (!enabled_proc.get_successful ()) {
-                emit_tamper ("systemd_disabled",
-                    "vigil-daemon.service is not enabled (status: %s)".printf (
-                        stdout_buf.strip ()));
-            }
-        } catch (Error e) {
-            // systemctl may not be available (e.g., in containers)
-            debug ("Could not check systemd service: %s", e.message);
-        }
+        _cached_config_hash = SecurityUtils.compute_sha256_hex_string (data);
+        return _cached_config_hash;
     }
 
     /**
@@ -416,11 +373,9 @@ public class Vigil.Services.TamperDetectionService : Object {
     /**
      * Check that the settings lock hasn't been bypassed via CLI.
      *
-     * If `settings-locked` was changed to false, or the unlock code hash
-     * was cleared while locked, this is a tamper event. The GUI sends a
-     * "Settings unlocked (authorized by partner)" message BEFORE toggling
-     * the lock, so the partner can distinguish legitimate vs. bypassed
-     * unlocks by checking whether that message preceded the alert.
+     * The GUI writes an `authorized_unlock` marker file before toggling
+     * `settings-locked` to false. If the marker is present, this is a
+     * legitimate unlock (WARNING). If absent, it was a dconf bypass (TAMPER).
      */
     public void check_settings_lock () {
         if (_settings == null) {
@@ -437,8 +392,17 @@ public class Vigil.Services.TamperDetectionService : Object {
 
         // Only alert if we previously observed settings as locked and they got unlocked
         if (_settings_were_locked && hash != "" && !locked) {
-            emit_tamper ("settings_unlocked",
-                "Settings lock was disabled (unlock code may have been bypassed)");
+            var marker = Path.build_filename (
+                SecurityUtils.get_app_data_dir (), "authorized_unlock"
+            );
+            if (FileUtils.test (marker, FileTest.EXISTS)) {
+                FileUtils.unlink (marker);
+                emit_warning ("settings_unlocked",
+                    "Settings unlocked with correct code (authorized)");
+            } else {
+                emit_tamper ("settings_unlocked",
+                    "Settings lock was disabled (unlock code may have been bypassed)");
+            }
         }
 
         // If lock is set but hash was cleared (attempt to make unlock trivial)
@@ -473,6 +437,8 @@ public class Vigil.Services.TamperDetectionService : Object {
 
         foreach (var key in critical_keys) {
             _settings.changed[key].connect (() => {
+                // Invalidate cached config hash on any settings change
+                _cached_config_hash = null;
                 if (is_running) {
                     debug ("Critical setting changed, running tamper check");
                     check_settings_sanity ();

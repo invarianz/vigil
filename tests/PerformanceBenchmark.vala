@@ -481,8 +481,8 @@ void bench_full_pipeline_no_network () {
 }
 
 void bench_full_encrypted_pipeline () {
-    // Simulates the real E2EE path:
-    // generate_path → file_read → encrypt_attachment → encrypt_event → mark_uploaded → cleanup
+    // Simulates the real E2EE path (optimized: single file read):
+    // generate_path → file_read → mark_pending(preloaded) → encrypt_attachment → encrypt_event → mark_uploaded → cleanup
     var dir = Path.build_filename (bench_data_dir, "storage-bench-enc-pipeline");
     DirUtils.create_with_parents (dir, 0755);
     var store = new Vigil.Services.StorageService (dir);
@@ -498,13 +498,13 @@ void bench_full_encrypted_pipeline () {
         // 1. Generate path + write fake file
         var path = store.generate_screenshot_path ();
         try { FileUtils.set_data (path, fake_png); } catch (Error e) {}
-        try { store.mark_pending (path); } catch (Error e) {}
 
-        // 2. Read file back (simulating upload_media reading the file)
+        // 2. Read file ONCE — pass to both mark_pending and encrypt
         uint8[] file_data;
         try { FileUtils.get_data (path, out file_data); } catch (Error e) { return; }
+        try { store.mark_pending (path, file_data); } catch (Error e) {}
 
-        // 3. AES-256-CTR encrypt attachment
+        // 3. AES-256-CTR encrypt attachment (reuses same buffer)
         var att = enc.encrypt_attachment (file_data);
 
         // 4. Build encrypted event JSON (mimics send_encrypted_screenshot)

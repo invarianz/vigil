@@ -146,6 +146,29 @@ public class Vigil.Services.SecurityUtils : Object {
     }
 
     /**
+     * Decode a hex string to bytes. Returns null on invalid input.
+     */
+    public static uint8[]? hex_to_bytes (string hex) {
+        if (hex.length % 2 != 0) return null;
+        var len = hex.length / 2;
+        var result = new uint8[len];
+        for (int i = 0; i < len; i++) {
+            int high = hex_nibble (hex[i * 2]);
+            int low = hex_nibble (hex[i * 2 + 1]);
+            if (high < 0 || low < 0) return null;
+            result[i] = (uint8) ((high << 4) | low);
+        }
+        return result;
+    }
+
+    private static int hex_nibble (char c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    }
+
+    /**
      * Compute SHA-256 hex digest using OpenSSL (hardware-accelerated).
      *
      * 5x faster than GLib.Checksum for binary data on the hot path
@@ -299,16 +322,10 @@ public class Vigil.Services.SecurityUtils : Object {
         // Hostname
         sb.append_printf ("host: %s", Environment.get_host_name ());
 
-        // Session type
-        var session = Vigil.Utils.detect_session_type ();
-        sb.append_printf (" | session: %s", session.to_string ());
-
         // Binary path (shows Flatpak vs system install vs dev build)
         sb.append_printf (" | binary: %s", binary_path);
 
-        // Flatpak detection
-        bool is_flatpak = FileUtils.test ("/.flatpak-info", FileTest.EXISTS);
-        sb.append_printf (" | flatpak: %s", is_flatpak ? "yes" : "no");
+        sb.append_printf (" | flatpak: yes");
 
         // Container detection (docker/lxc/podman via cgroup)
         string container = "none";

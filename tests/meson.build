@@ -25,7 +25,6 @@ test_utils = files('TestUtils.vala')
 
 # Unit tests -- pure logic, no display server needed
 unit_tests = {
-    'SessionDetector': 'SessionDetectorTest.vala',
     'SchedulerService': 'SchedulerServiceTest.vala',
     'StorageService': 'StorageServiceTest.vala',
     'HeartbeatService': 'HeartbeatServiceTest.vala',

@@ -551,22 +551,6 @@ public class Vigil.Services.HeartbeatService : Object {
             case "e2ee_disabled":
                 return "Encryption keys were deleted. " +
                     "Screenshots cannot be sent securely.";
-            case "autostart_missing":
-                return "Vigil\u2019s autostart entry was deleted. " +
-                    "Someone is trying to uninstall Vigil. " +
-                    "It will NOT restart after the next reboot.";
-            case "autostart_modified":
-                return "Vigil\u2019s autostart was changed to launch " +
-                    "a different program instead of Vigil. Someone " +
-                    "is replacing Vigil with something else.";
-            case "autostart_unreadable":
-                return "Vigil\u2019s autostart file permissions were changed " +
-                    "so Vigil cannot read it. Someone is tampering " +
-                    "with Vigil\u2019s startup configuration.";
-            case "systemd_disabled":
-                return "Vigil\u2019s background service was disabled. " +
-                    "Someone is trying to uninstall Vigil. " +
-                    "It will NOT restart if stopped or after a reboot.";
             case "settings_unlocked":
                 return "The settings lock was bypassed without " +
                     "the unlock code.";

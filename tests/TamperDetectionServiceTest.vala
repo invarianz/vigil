@@ -5,89 +5,7 @@
 
 /**
  * Unit tests for TamperDetectionService.
- *
- * Uses a temp directory for autostart desktop path to avoid
- * interfering with the real system.
  */
-
-string test_base_dir;
-
-void setup_test_dir () {
-    test_base_dir = TestUtils.make_test_dir ();
-    DirUtils.create_with_parents (test_base_dir, 0755);
-}
-
-void teardown_test_dir () {
-    TestUtils.delete_directory_recursive (test_base_dir);
-}
-
-void test_autostart_missing_detected () {
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.autostart_desktop_path = "/tmp/definitely-does-not-exist.desktop";
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => {
-        event_type = t;
-    });
-
-    svc.check_autostart_entry ();
-
-    assert_true (event_type == "autostart_missing");
-}
-
-void test_autostart_present_no_tamper () {
-    setup_test_dir ();
-
-    // Create a fake desktop file
-    var desktop_path = Path.build_filename (test_base_dir, "vigil.desktop");
-    try {
-        FileUtils.set_contents (desktop_path,
-            "[Desktop Entry]\nExec=io.github.invarianz.vigil.daemon\n");
-    } catch (Error e) {
-        assert_not_reached ();
-    }
-
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.autostart_desktop_path = desktop_path;
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => {
-        event_type = t;
-    });
-
-    svc.check_autostart_entry ();
-
-    assert_true (event_type == null);
-
-    teardown_test_dir ();
-}
-
-void test_autostart_modified_detected () {
-    setup_test_dir ();
-
-    var desktop_path = Path.build_filename (test_base_dir, "vigil.desktop");
-    try {
-        // Write a desktop file that references a different binary
-        FileUtils.set_contents (desktop_path,
-            "[Desktop Entry]\nExec=some-other-program\n");
-    } catch (Error e) {
-        assert_not_reached ();
-    }
-
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.autostart_desktop_path = desktop_path;
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => {
-        event_type = t;
-    });
-
-    svc.check_autostart_entry ();
-
-    assert_true (event_type == "autostart_modified");
-
-    teardown_test_dir ();
-}
 
 void test_config_hash_without_settings () {
     var svc = new Vigil.Services.TamperDetectionService (null);
@@ -325,7 +243,6 @@ void test_settings_sanity_matrix_incomplete () {
 
 void test_start_stop_lifecycle () {
     var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
 
     assert_false (svc.is_running);
 
@@ -344,6 +261,13 @@ void test_settings_lock_bypass_detected () {
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
+
+    // Ensure no marker file exists (unauthorized bypass)
+    var marker = Path.build_filename (
+        Environment.get_user_data_dir (),
+        "io.github.invarianz.vigil", "authorized_unlock"
+    );
+    FileUtils.unlink (marker);
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -364,6 +288,54 @@ void test_settings_lock_bypass_detected () {
     settings.set_boolean ("settings-locked", false);
     svc.check_settings_lock ();
     assert_true (event_type == "settings_unlocked");
+
+    // Cleanup
+    settings.set_string ("unlock-code-hash", "");
+    settings.set_boolean ("settings-locked", false);
+}
+
+void test_settings_lock_authorized_unlock () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+
+    // Write the authorized_unlock marker file (simulating GUI unlock)
+    var marker = Path.build_filename (
+        Environment.get_user_data_dir (),
+        "io.github.invarianz.vigil", "authorized_unlock"
+    );
+    var parent = Path.get_dirname (marker);
+    DirUtils.create_with_parents (parent, 0755);
+    try {
+        FileUtils.set_contents (marker, "authorized");
+    } catch (Error e) { assert_not_reached (); }
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        if (event_type == null) {
+            event_type = t;
+        }
+    });
+
+    // First: settings must be seen as locked
+    settings.set_string ("unlock-code-hash", "somehash");
+    settings.set_boolean ("settings-locked", true);
+    svc.check_settings_lock ();
+    assert_true (event_type == null);
+
+    // Now unlock with marker present — should be a warning (~), not tamper
+    settings.set_boolean ("settings-locked", false);
+    svc.check_settings_lock ();
+    assert_true (event_type == "~settings_unlocked");
+
+    // Marker should have been deleted by the check
+    assert_false (FileUtils.test (marker, FileTest.EXISTS));
 
     // Cleanup
     settings.set_string ("unlock-code-hash", "");
@@ -784,7 +756,6 @@ void test_emit_background_permission_revoked () {
 
 void test_stop_cleans_up_urandom () {
     var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
 
     svc.start ();
     assert_true (svc.is_running);
@@ -1084,9 +1055,6 @@ void test_warning_report_method () {
 public static int main (string[] args) {
     Test.init (ref args);
 
-    Test.add_func ("/tamper/autostart_missing", test_autostart_missing_detected);
-    Test.add_func ("/tamper/autostart_present", test_autostart_present_no_tamper);
-    Test.add_func ("/tamper/autostart_modified", test_autostart_modified_detected);
     Test.add_func ("/tamper/config_hash_no_settings", test_config_hash_without_settings);
     Test.add_func ("/tamper/config_hash_with_settings", test_config_hash_with_settings);
     Test.add_func ("/tamper/config_hash_changes", test_config_hash_changes_on_setting_change);
@@ -1104,6 +1072,7 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/settings_matrix_incomplete", test_settings_sanity_matrix_incomplete);
     Test.add_func ("/tamper/start_stop_lifecycle", test_start_stop_lifecycle);
     Test.add_func ("/tamper/lock_bypass_detected", test_settings_lock_bypass_detected);
+    Test.add_func ("/tamper/lock_authorized_unlock", test_settings_lock_authorized_unlock);
     Test.add_func ("/tamper/lock_hash_cleared", test_settings_lock_hash_cleared_detected);
     Test.add_func ("/tamper/lock_properly_locked", test_settings_lock_no_tamper_when_properly_locked);
     Test.add_func ("/tamper/heartbeat_interval_tampered", test_heartbeat_interval_tampered);

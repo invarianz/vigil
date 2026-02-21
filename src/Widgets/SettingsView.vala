@@ -4,22 +4,18 @@
  */
 
 /**
- * Radically simplified settings view.
+ * Unified settings view with integrated lock flow.
  *
- * The user only needs to provide:
+ * The user provides:
  *   1. Homeserver (auto-discovered from server name)
  *   2. Username
  *   3. Password
  *   4. Partner's Matrix ID
  *   5. E2EE password (for encrypting crypto state at rest)
  *
- * One "Setup" button does everything: login, create encrypted room,
- * initialize E2EE, upload device keys, share room keys.
- *
- * After setup, settings are locked. The partner receives an unlock code
- * via Matrix. To change settings, the user must enter this code.
- *
- * Schedule/storage/system settings are in a collapsible "Advanced" section.
+ * One "Lock Settings" button does everything: setup (if needed), then lock.
+ * When locked, all fields are greyed out (visible but not editable).
+ * The unlock code is shown once in a Granite dialog.
  */
 public class Vigil.Widgets.SettingsView : Gtk.Box {
 
@@ -28,17 +24,14 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private Gtk.PasswordEntry password_entry;
     private Gtk.Entry partner_entry;
     private Gtk.PasswordEntry e2ee_password_entry;
-    private Gtk.Button setup_button;
     private Gtk.Label status_label;
     private Vigil.Widgets.RangeScale interval_range;
 
-    private Gtk.Box setup_box;
+    private Gtk.Button lock_button;
     private Gtk.Entry unlock_entry;
     private Gtk.Button unlock_button;
-    private Gtk.Button lock_button;
+    private Gtk.Box unlock_row;
     private Gtk.Label lock_status_label;
-    private Gtk.Box lock_box;
-    private Granite.HeaderLabel lock_header;
 
     private GLib.Settings settings;
     private Vigil.Services.MatrixTransportService _matrix_svc;
@@ -48,6 +41,9 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private const int PBKDF2_ITERATIONS = 600000;
     private const int PBKDF2_SALT_LEN = 16;
     private const int PBKDF2_KEY_LEN = 32;
+
+    /** Path to the authorized unlock marker file. */
+    private string _authorized_unlock_path;
 
     public SettingsView () {
         Object ();
@@ -64,47 +60,15 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         settings = new GLib.Settings ("io.github.invarianz.vigil");
         _matrix_svc = new Vigil.Services.MatrixTransportService ();
 
+        _authorized_unlock_path = Path.build_filename (
+            Environment.get_user_data_dir (),
+            "io.github.invarianz.vigil", "authorized_unlock"
+        );
+
         // Load existing Matrix credentials so we can send lock/unlock messages
         _matrix_svc.homeserver_url = settings.get_string ("matrix-homeserver-url");
         _matrix_svc.access_token = settings.get_string ("matrix-access-token");
         _matrix_svc.room_id = settings.get_string ("matrix-room-id");
-
-        // --- Settings lock section ---
-        lock_header = new Granite.HeaderLabel ("Settings Lock");
-
-        lock_status_label = new Gtk.Label ("") {
-            halign = Gtk.Align.START,
-            hexpand = true,
-            wrap = true
-        };
-
-        unlock_entry = new Gtk.Entry () {
-            placeholder_text = "Enter unlock code",
-            hexpand = true
-        };
-
-        unlock_button = new Gtk.Button.with_label ("Unlock");
-        unlock_button.add_css_class ("destructive-action");
-        unlock_button.clicked.connect (on_unlock_clicked);
-
-        lock_button = new Gtk.Button.with_label ("Lock Settings");
-        lock_button.add_css_class ("suggested-action");
-        lock_button.clicked.connect (on_lock_clicked);
-
-        lock_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 12) {
-            margin_top = 16,
-            margin_bottom = 16,
-            margin_start = 16,
-            margin_end = 16
-        };
-
-        var unlock_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
-        unlock_row.append (unlock_entry);
-        unlock_row.append (unlock_button);
-
-        lock_box.append (lock_status_label);
-        lock_box.append (unlock_row);
-        lock_box.append (lock_button);
 
         homeserver_entry = new Gtk.Entry () {
             placeholder_text = "matrix.org",
@@ -139,12 +103,6 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             hexpand = true
         };
 
-        setup_button = new Gtk.Button.with_label ("Setup") {
-            halign = Gtk.Align.END
-        };
-        setup_button.add_css_class ("suggested-action");
-        setup_button.clicked.connect (on_setup_clicked);
-
         status_label = new Gtk.Label ("") {
             halign = Gtk.Align.START,
             hexpand = true,
@@ -160,21 +118,6 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             set_status ("Logged in (room not yet created)", false);
         }
 
-        setup_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 16) {
-            margin_top = 16,
-            margin_bottom = 16,
-            margin_start = 16,
-            margin_end = 16
-        };
-
-        setup_box.append (create_form_row ("Matrix Server", homeserver_entry));
-        setup_box.append (create_form_row ("Username", username_entry));
-        setup_box.append (create_form_row ("Password", password_entry));
-        setup_box.append (create_form_row ("Partner Matrix ID", partner_entry));
-        setup_box.append (create_form_row ("E2EE Password", e2ee_password_entry));
-        setup_box.append (setup_button);
-        setup_box.append (status_label);
-
         // --- Screenshot interval range slider ---
         interval_range = new Vigil.Widgets.RangeScale (
             30, 120, 5, 30,
@@ -186,56 +129,114 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             settings.set_int ("max-interval-seconds", (int) interval_range.upper_value);
         });
 
-        setup_box.append (create_form_row ("Screenshot interval", interval_range));
+        // --- Lock button (does setup-if-needed + lock) ---
+        lock_button = new Gtk.Button.with_label ("Lock Settings") {
+            halign = Gtk.Align.END
+        };
+        lock_button.add_css_class ("suggested-action");
+        lock_button.clicked.connect (() => {
+            do_lock.begin ();
+        });
 
-        // Assemble the view
-        append (lock_header);
-        append (lock_box);
-        append (setup_box);
+        // --- Unlock row (visible when locked) ---
+        lock_status_label = new Gtk.Label ("") {
+            halign = Gtk.Align.START,
+            hexpand = true,
+            wrap = true
+        };
+
+        unlock_entry = new Gtk.Entry () {
+            placeholder_text = "Enter unlock code",
+            hexpand = true
+        };
+
+        unlock_button = new Gtk.Button.with_label ("Unlock");
+        unlock_button.add_css_class ("destructive-action");
+        unlock_button.clicked.connect (on_unlock_clicked);
+
+        unlock_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+        unlock_row.append (unlock_entry);
+        unlock_row.append (unlock_button);
+
+        // --- Assemble the view (single section, no headers) ---
+        var content_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 16) {
+            margin_top = 16,
+            margin_bottom = 16,
+            margin_start = 16,
+            margin_end = 16
+        };
+
+        content_box.append (create_form_row ("Matrix Server", homeserver_entry));
+        content_box.append (create_form_row ("Username", username_entry));
+        content_box.append (create_form_row ("Password", password_entry));
+        content_box.append (create_form_row ("Partner Matrix ID", partner_entry));
+        content_box.append (create_form_row ("E2EE Password", e2ee_password_entry));
+        content_box.append (status_label);
+        content_box.append (create_form_row ("Screenshot interval", interval_range));
+        content_box.append (lock_button);
+        content_box.append (lock_status_label);
+        content_box.append (unlock_row);
+
+        append (content_box);
 
         // Apply initial lock state
         update_lock_ui ();
     }
 
     /**
-     * One-button setup: login, create room, initialize E2EE.
+     * Unified lock flow: setup if needed, then lock and show code in dialog.
      */
-    private void on_setup_clicked () {
-        var hs_input = homeserver_entry.text.strip ();
-        var username = username_entry.text.strip ();
-        var password = password_entry.text;
-        var partner_id = partner_entry.text.strip ();
-        var e2ee_password = e2ee_password_entry.text;
+    private async void do_lock () {
+        var existing_token = settings.get_string ("matrix-access-token");
 
-        if (hs_input == "" || username == "" || password == "") {
-            set_status ("Please fill in homeserver, username, and password", false);
-            return;
+        if (existing_token == "") {
+            // Setup not done yet — validate fields and run setup first
+            var hs_input = homeserver_entry.text.strip ();
+            var username = username_entry.text.strip ();
+            var password = password_entry.text;
+            var partner_id = partner_entry.text.strip ();
+            var e2ee_password = e2ee_password_entry.text;
+
+            if (hs_input == "" || username == "" || password == "") {
+                set_status ("Please fill in homeserver, username, and password", false);
+                return;
+            }
+
+            if (partner_id == "" || !partner_id.has_prefix ("@")) {
+                set_status ("Please enter the partner's Matrix ID (e.g. @partner:matrix.org)", false);
+                return;
+            }
+
+            if (e2ee_password == "") {
+                set_status ("Please set an E2EE password to protect your encryption keys", false);
+                return;
+            }
+
+            lock_button.sensitive = false;
+            set_status ("Discovering homeserver\u2026", false);
+
+            bool setup_ok = yield run_setup (hs_input, username, password, partner_id, e2ee_password);
+            if (!setup_ok) {
+                lock_button.sensitive = true;
+                return;
+            }
         }
 
-        if (partner_id == "" || !partner_id.has_prefix ("@")) {
-            set_status ("Please enter the partner's Matrix ID (e.g. @partner:matrix.org)", false);
-            return;
-        }
-
-        if (e2ee_password == "") {
-            set_status ("Please set an E2EE password to protect your encryption keys", false);
-            return;
-        }
-
-        setup_button.sensitive = false;
-        set_status ("Discovering homeserver\u2026", false);
-
-        run_setup.begin (hs_input, username, password, partner_id, e2ee_password);
+        // Now lock
+        yield lock_settings ();
+        lock_button.sensitive = true;
     }
 
-    private async void run_setup (string hs_input, string username, string password,
+    /**
+     * Run the setup pipeline. Returns true on success.
+     */
+    private async bool run_setup (string hs_input, string username, string password,
                                    string partner_id, string e2ee_password) {
         // Step 1: Discover homeserver
         var hs_url = yield _matrix_svc.discover_homeserver (hs_input);
         if (hs_url == null) {
             set_status ("Failed to discover homeserver", false);
-            setup_button.sensitive = true;
-            return;
+            return false;
         }
         set_status ("Logging in to %s\u2026".printf (hs_url), false);
 
@@ -243,8 +244,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         var token = yield _matrix_svc.login (hs_url, username, password);
         if (token == null) {
             set_status ("Login failed -- check credentials", false);
-            setup_button.sensitive = true;
-            return;
+            return false;
         }
 
         // Save credentials
@@ -263,8 +263,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         var new_room_id = yield _matrix_svc.create_encrypted_room (partner_id);
         if (new_room_id == null) {
             set_status ("Room creation failed -- is the partner ID correct?", false);
-            setup_button.sensitive = true;
-            return;
+            return false;
         }
         settings.set_string ("matrix-room-id", new_room_id);
         set_status ("Locking down room permissions\u2026", false);
@@ -282,8 +281,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
 
         if (!enc_svc.initialize (e2ee_password)) {
             set_status ("E2EE initialization failed", false);
-            setup_button.sensitive = true;
-            return;
+            return false;
         }
 
         // Step 5: Full E2EE setup (upload keys, create Megolm session, share)
@@ -293,17 +291,50 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         password_entry.text = "";
         e2ee_password_entry.text = "";
 
-        setup_button.sensitive = true;
+        // Step 6: Request screenshot permission via Portal.
+        // The first portal screenshot call triggers a one-time "Allow" dialog.
+        // Do this during setup so the user grants it before monitoring starts,
+        // rather than seeing a surprise dialog on the first scheduled capture.
+        set_status ("Requesting screenshot permission\u2026", false);
+        yield request_screenshot_permission ();
 
         if (e2ee_ok) {
-            set_status ("Setup complete -- monitoring ready", true);
+            set_status ("Setup complete -- locking settings\u2026", true);
         } else {
-            // Partial success - login and room created but E2EE had issues
             set_status ("Setup mostly complete -- E2EE key sharing deferred until partner is online", true);
         }
 
-        // Auto-lock settings after successful setup
-        yield lock_settings ();
+        return true;
+    }
+
+    /**
+     * Take a throwaway screenshot to trigger the portal permission dialog.
+     *
+     * The XDG Desktop Portal shows a one-time "Allow screenshots" dialog
+     * on the first non-interactive call. By triggering this during setup,
+     * the user sees and grants the permission before monitoring starts.
+     */
+    private async void request_screenshot_permission () {
+        try {
+            var portal = new Xdp.Portal ();
+            var uri = yield portal.take_screenshot (
+                null,
+                Xdp.ScreenshotFlags.NONE,
+                null
+            );
+            // Discard the result — we only needed to trigger the permission dialog
+            if (uri != null && uri != "") {
+                try {
+                    var file = File.new_for_uri (uri);
+                    yield file.delete_async (Priority.DEFAULT, null);
+                } catch (Error e) {
+                    // Cleanup failure is fine
+                }
+            }
+            debug ("Screenshot permission granted during setup");
+        } catch (Error e) {
+            debug ("Screenshot permission request failed: %s", e.message);
+        }
     }
 
     /**
@@ -413,30 +444,14 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     }
 
     private static uint8[]? hex_to_bytes (string hex) {
-        if (hex.length % 2 != 0) return null;
-        var len = hex.length / 2;
-        var result = new uint8[len];
-        for (int i = 0; i < len; i++) {
-            int high = hex_char_val (hex[i * 2]);
-            int low = hex_char_val (hex[i * 2 + 1]);
-            if (high < 0 || low < 0) return null;
-            result[i] = (uint8) ((high << 4) | low);
-        }
-        return result;
-    }
-
-    private static int hex_char_val (char c) {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
+        return Vigil.Services.SecurityUtils.hex_to_bytes (hex);
     }
 
     /**
-     * Lock settings and display the unlock code.
+     * Lock settings and show the unlock code in a Granite dialog.
      *
      * The code is NOT sent via Matrix (the monitored user can read the
-     * room). Instead, it is shown once in the UI for the user to share
+     * room). Instead, it is shown once in a dialog for the user to share
      * with their partner out-of-band (in person, phone, or another chat).
      */
     private async void lock_settings () {
@@ -451,16 +466,26 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             "(in person, phone, or another chat)."
         );
 
-        // Show the code prominently in the lock section (directly above
-        // the unlock entry field, so the user can't miss it)
-        lock_status_label.label =
-            "Unlock code: %s\n".printf (code) +
-            "Share this code with your partner now (in person, phone, " +
-            "or another chat). It will not be shown again.";
-        lock_status_label.remove_css_class ("error");
-        lock_status_label.add_css_class ("success");
-
         update_lock_ui ();
+
+        // Show the unlock code in a Granite dialog
+        var dialog = new Granite.MessageDialog.with_image_from_icon_name (
+            "Settings Locked",
+            "Your unlock code is: <b>%s</b>\n\n".printf (code) +
+                "Share this code with your accountability partner now " +
+                "(in person, phone, or another chat). It will not be shown again.",
+            "dialog-password",
+            Gtk.ButtonsType.NONE
+        );
+        dialog.transient_for = (Gtk.Window) get_root ();
+        dialog.modal = true;
+        dialog.secondary_label.use_markup = true;
+        var ok_button = (Gtk.Button) dialog.add_button ("OK", Gtk.ResponseType.OK);
+        ok_button.add_css_class ("suggested-action");
+        ok_button.clicked.connect (() => {
+            dialog.destroy ();
+        });
+        dialog.present ();
     }
 
     /**
@@ -469,6 +494,10 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
      * Rate-limited: after 3 failed attempts, a 30-second cooldown is
      * enforced. The counter is kept in memory so it cannot be reset
      * by editing GSettings/dconf.
+     *
+     * Writes an authorized_unlock marker file before toggling the
+     * GSettings lock, so the daemon can distinguish GUI unlocks from
+     * dconf bypass attempts.
      */
     private void on_unlock_clicked () {
         // Rate limiting: after 3 failures, require 30s cooldown
@@ -497,61 +526,59 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             return;
         }
 
-        // Correct code -- send notification then unlock
+        // Correct code — write marker, send notification, then unlock
         _failed_unlock_attempts = 0;
+
+        // Write authorized_unlock marker BEFORE toggling settings-locked
+        // so the daemon sees it when the GSettings change fires
+        try {
+            var parent = Path.get_dirname (_authorized_unlock_path);
+            DirUtils.create_with_parents (parent, 0700);
+            FileUtils.set_contents (_authorized_unlock_path, "authorized");
+        } catch (Error e) {
+            warning ("Failed to write authorized unlock marker: %s", e.message);
+        }
+
         _matrix_svc.send_text_message.begin (
             "Settings unlocked (authorized by partner). Changes may follow."
         );
         settings.set_boolean ("settings-locked", false);
+
+        // Clean up marker (daemon will have already read it)
+        FileUtils.unlink (_authorized_unlock_path);
+
         unlock_entry.text = "";
         update_lock_ui ();
     }
 
     /**
-     * Re-lock settings with a new code.
-     */
-    private void on_lock_clicked () {
-        lock_settings.begin ();
-    }
-
-    /**
      * Update the UI based on current lock state.
+     *
+     * When locked: all form fields greyed out (visible but insensitive),
+     * lock button hidden, unlock row visible.
+     * When unlocked: all fields sensitive, lock button visible, unlock row hidden.
      */
     private void update_lock_ui () {
         bool locked = settings.get_boolean ("settings-locked");
-        bool setup_done = settings.get_string ("matrix-access-token") != "";
 
-        // If setup hasn't been done yet, don't show lock UI
-        if (!setup_done) {
-            lock_header.visible = false;
-            lock_box.visible = false;
-            setup_box.sensitive = true;
-            return;
-        }
-
-        lock_header.visible = true;
-        lock_box.visible = true;
+        homeserver_entry.sensitive = !locked;
+        username_entry.sensitive = !locked;
+        password_entry.sensitive = !locked;
+        partner_entry.sensitive = !locked;
+        e2ee_password_entry.sensitive = !locked;
+        interval_range.sensitive = !locked;
+        lock_button.visible = !locked;
+        unlock_row.visible = locked;
 
         if (locked) {
-            // Don't overwrite the label if it's showing the one-time unlock code
-            if (!lock_status_label.label.contains ("Unlock code:")) {
-                lock_status_label.label =
-                    "Settings are locked. Ask your accountability partner" +
-                    " for the unlock code to make changes.";
-                lock_status_label.remove_css_class ("error");
-            }
-            unlock_entry.visible = true;
-            unlock_button.visible = true;
-            lock_button.visible = false;
-            // Hide setup entirely when locked
-            setup_box.visible = false;
-        } else {
-            lock_status_label.label = "Settings are unlocked. Make your changes, then lock when done.";
+            lock_status_label.label =
+                "Settings are locked. Ask your accountability partner" +
+                " for the unlock code to make changes.";
             lock_status_label.remove_css_class ("error");
-            unlock_entry.visible = false;
-            unlock_button.visible = false;
-            lock_button.visible = true;
-            setup_box.visible = true;
+            lock_status_label.visible = true;
+        } else {
+            lock_status_label.label = "";
+            lock_status_label.visible = false;
         }
     }
 

@@ -84,9 +84,6 @@ all_dependencies = [
 #  Service layer: shared between daemon and tests
 # ──────────────────────────────────────────────────────────────
 service_src_files = files(
-    'src' / 'Services' / 'IScreenshotBackend.vala',
-    'src' / 'Services' / 'PortalScreenshotBackend.vala',
-    'src' / 'Services' / 'GalaScreenshotBackend.vala',
     'src' / 'Services' / 'ScreenshotService.vala',
     'src' / 'Services' / 'SchedulerService.vala',
 
@@ -96,7 +93,6 @@ service_src_files = files(
     'src' / 'Services' / 'MatrixTransportService.vala',
     'src' / 'Services' / 'EncryptionService.vala',
     'src' / 'Services' / 'SecurityUtils.vala',
-    'src' / 'Utils' / 'SessionDetector.vala',
 )
 
 vigil_service_lib = static_library(
@@ -194,25 +190,6 @@ install_data(
     'data' / 'vigil.gschema.xml',
     install_dir: get_option('datadir') / 'glib-2.0' / 'schemas',
     rename: app_id + '.gschema.xml'
-)
-
-# Systemd user service (substitute @BINDIR@)
-systemd_service_conf = configuration_data()
-systemd_service_conf.set('BINDIR', get_option('prefix') / get_option('bindir'))
-
-configure_file(
-    input: 'data' / 'vigil-daemon.service',
-    output: 'vigil-daemon.service',
-    configuration: systemd_service_conf,
-    install: true,
-    install_dir: get_option('prefix') / 'lib' / 'systemd' / 'user'
-)
-
-# Autostart desktop entry for the daemon
-install_data(
-    'data' / 'vigil-daemon-autostart.desktop',
-    install_dir: get_option('sysconfdir') / 'xdg' / 'autostart',
-    rename: app_id + '.daemon.desktop'
 )
 
 # Compile schemas after install

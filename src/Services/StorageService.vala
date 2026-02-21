@@ -113,11 +113,18 @@ public class Vigil.Services.StorageService : Object {
      *
      * Computes a SHA-256 hash of the file at capture time so integrity
      * can be verified before upload (detects post-capture tampering).
+     *
+     * @param screenshot_path Path to the screenshot file.
+     * @param preloaded_data If non-null, uses this data instead of reading
+     *                       from disk. The caller is responsible for having
+     *                       already validated the file. This avoids a
+     *                       redundant 2MB read in the immediate upload path.
      */
-    public void mark_pending (string screenshot_path) throws Error {
+    public void mark_pending (string screenshot_path, uint8[]? preloaded_data = null) throws Error {
         // Validate that the path is within our screenshots directory
         // to prevent directory traversal attacks.
-        var abs_path = File.new_for_path (screenshot_path).get_path ();
+        var screenshot_file = File.new_for_path (screenshot_path);
+        var abs_path = screenshot_file.get_path ();
         var abs_screenshots_dir = File.new_for_path (screenshots_dir).get_path ();
         if (abs_path == null || abs_screenshots_dir == null ||
             !abs_path.has_prefix (abs_screenshots_dir + "/")) {
@@ -131,22 +138,31 @@ public class Vigil.Services.StorageService : Object {
         // Compute SHA-256 hash of the screenshot for integrity verification
         string file_hash = "";
         try {
-            // Validate file size to prevent DoS from maliciously large files
-            var file_info = File.new_for_path (screenshot_path).query_info (
-                "standard::size,standard::type",
-                FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
-            if (file_info.get_file_type () != FileType.REGULAR) {
-                throw new IOError.INVALID_ARGUMENT (
-                    "Screenshot is not a regular file");
-            }
-            if (file_info.get_size () > SecurityUtils.MAX_SCREENSHOT_SIZE) {
-                throw new IOError.INVALID_ARGUMENT (
-                    "Screenshot exceeds maximum size (%lld bytes)".printf (
-                        SecurityUtils.MAX_SCREENSHOT_SIZE));
-            }
-
             uint8[] file_data;
-            FileUtils.get_data (screenshot_path, out file_data);
+            if (preloaded_data != null) {
+                file_data = preloaded_data;
+                if (file_data.length > SecurityUtils.MAX_SCREENSHOT_SIZE) {
+                    throw new IOError.INVALID_ARGUMENT (
+                        "Screenshot exceeds maximum size (%lld bytes)".printf (
+                            SecurityUtils.MAX_SCREENSHOT_SIZE));
+                }
+            } else {
+                // Validate file size/type to prevent DoS from maliciously large files.
+                // Reuse the File object from path canonicalization above.
+                var file_info = screenshot_file.query_info (
+                    "standard::size,standard::type",
+                    FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+                if (file_info.get_file_type () != FileType.REGULAR) {
+                    throw new IOError.INVALID_ARGUMENT (
+                        "Screenshot is not a regular file");
+                }
+                if (file_info.get_size () > SecurityUtils.MAX_SCREENSHOT_SIZE) {
+                    throw new IOError.INVALID_ARGUMENT (
+                        "Screenshot exceeds maximum size (%lld bytes)".printf (
+                            SecurityUtils.MAX_SCREENSHOT_SIZE));
+                }
+                FileUtils.get_data (screenshot_path, out file_data);
+            }
             file_hash = SecurityUtils.compute_sha256_hex (file_data);
             capture_hashed (file_hash);
         } catch (Error e) {
@@ -286,11 +302,10 @@ public class Vigil.Services.StorageService : Object {
                 }
 
                 var marker_path = Path.build_filename (pending_dir, name);
-                var marker = File.new_for_path (marker_path);
 
-                uint8[] contents;
-                marker.load_contents (null, out contents, null);
-                var lines = ((string) contents).split ("\n");
+                string marker_contents;
+                FileUtils.get_contents (marker_path, out marker_contents);
+                var lines = marker_contents.split ("\n");
 
                 if (lines.length >= 2) {
                     if (FileUtils.test (lines[0], FileTest.EXISTS)) {
@@ -305,11 +320,7 @@ public class Vigil.Services.StorageService : Object {
                         pending.add (item);
                     } else {
                         // Screenshot file was deleted; clean up orphan marker
-                        try {
-                            marker.delete ();
-                        } catch (Error del_err) {
-                            // Ignore cleanup failures
-                        }
+                        FileUtils.unlink (marker_path);
                     }
                 }
             }

@@ -36,7 +36,6 @@ Vigil.Daemon.DBusServer create_test_server () {
     var matrix_svc = new Vigil.Services.MatrixTransportService ();
     var heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
     var tamper_svc = new Vigil.Services.TamperDetectionService (null);
-    tamper_svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
 
     // meson test sets GSETTINGS_SCHEMA_DIR and GSETTINGS_BACKEND=memory
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
@@ -97,7 +96,6 @@ void test_tamper_events_propagated () {
     var matrix_svc = new Vigil.Services.MatrixTransportService ();
     var heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
     var tamper_svc = new Vigil.Services.TamperDetectionService (null);
-    tamper_svc.autostart_desktop_path = "/tmp/nonexistent.desktop";
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
 
     var server = new Vigil.Daemon.DBusServer (

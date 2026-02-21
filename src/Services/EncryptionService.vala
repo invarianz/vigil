@@ -511,6 +511,7 @@ public class Vigil.Services.EncryptionService : Object {
     public bool restore_group_session () {
         var pickle_path = Path.build_filename (_crypto_dir, "megolm_outbound.pickle");
         if (!FileUtils.test (pickle_path, FileTest.EXISTS)) {
+            debug ("Megolm pickle not found at %s", pickle_path);
             return false;
         }
 

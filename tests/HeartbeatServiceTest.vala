@@ -27,16 +27,16 @@ void test_build_heartbeat_message_basic () {
 void test_build_heartbeat_message_with_tamper_events () {
     var svc = new Vigil.Services.HeartbeatService ();
 
-    svc.report_tamper_event ("autostart_missing: file deleted");
-    svc.report_tamper_event ("systemd_disabled: service stopped");
+    svc.report_tamper_event ("settings_unlocked: lock was disabled");
+    svc.report_tamper_event ("screenshot_tampered: file was modified");
 
     var msg = svc.build_heartbeat_message ();
 
     assert_true (msg.contains ("TAMPER ATTEMPT DETECTED!"));
     assert_true (msg.contains ("Tamper attempt"));
     // Human-friendly descriptions
-    assert_true (msg.contains ("autostart entry was deleted"));
-    assert_true (msg.contains ("background service was disabled"));
+    assert_true (msg.contains ("settings lock was bypassed"));
+    assert_true (msg.contains ("screenshot was modified"));
 }
 
 void test_build_heartbeat_message_with_warnings () {
@@ -58,7 +58,7 @@ void test_build_heartbeat_message_mixed_events () {
     var svc = new Vigil.Services.HeartbeatService ();
 
     // Mix of tamper and warning events
-    svc.report_tamper_event ("autostart_missing: file deleted");
+    svc.report_tamper_event ("settings_unlocked: lock was disabled");
     svc.report_tamper_event ("~capture_stalled: No screenshot in 300s");
 
     var msg = svc.build_heartbeat_message ();
@@ -66,7 +66,7 @@ void test_build_heartbeat_message_mixed_events () {
     // Should use tamper header (takes priority)
     assert_true (msg.contains ("TAMPER ATTEMPT DETECTED!"));
     // Both sections present
-    assert_true (msg.contains ("autostart entry was deleted"));
+    assert_true (msg.contains ("settings lock was bypassed"));
     assert_true (msg.contains ("screenshot system has stopped working"));
 }
 
@@ -378,8 +378,8 @@ void test_verification_section_below_separator () {
 
 void test_describe_tamper_event_known () {
     var result = Vigil.Services.HeartbeatService.describe_tamper_event (
-        "autostart_missing: Autostart desktop entry is missing");
-    assert_true (result.contains ("autostart entry was deleted"));
+        "settings_unlocked: lock was disabled");
+    assert_true (result.contains ("settings lock was bypassed"));
 
     result = Vigil.Services.HeartbeatService.describe_tamper_event (
         "ld_so_preload_detected: /etc/ld.so.preload contains evil.so");
@@ -423,7 +423,7 @@ void test_gap_with_tamper_shows_tamper_header () {
     svc.interval_seconds = 1;
 
     // Add a real tamper event
-    svc.report_tamper_event ("autostart_missing: file deleted");
+    svc.report_tamper_event ("settings_unlocked: lock was disabled");
 
     svc.start ();
     svc.stop ();
@@ -443,7 +443,7 @@ void test_is_warning_event () {
     assert_true (Vigil.Services.HeartbeatService.is_warning_event (
         "~capture_stalled: No screenshot"));
     assert_false (Vigil.Services.HeartbeatService.is_warning_event (
-        "autostart_missing: file deleted"));
+        "settings_unlocked: lock bypassed"));
     assert_false (Vigil.Services.HeartbeatService.is_warning_event (
         "settings_unlocked: bypassed"));
 }
@@ -461,7 +461,7 @@ void test_describe_strips_warning_prefix () {
 
 void test_heartbeat_html_output () {
     var svc = new Vigil.Services.HeartbeatService ();
-    svc.report_tamper_event ("autostart_missing: file deleted");
+    svc.report_tamper_event ("settings_unlocked: lock was disabled");
 
     string? html;
     svc.build_heartbeat_message (out html);
@@ -484,13 +484,7 @@ void test_heartbeat_html_warning_color () {
 }
 
 void test_network_recovery_message () {
-    var svc = new Vigil.Services.HeartbeatService ();
-    // Simulate 3 consecutive failures (set the backing field via property)
-    // We need to call send_heartbeat to increment, but we can't without Matrix
-    // So just check the message format when consecutive_failures > 0
-    // We'll use reflection-style approach: build message shows recovery info
-
-    // Use a fresh service, manually set internal state
+    // Check the message format when consecutive_failures is 0 (no recovery message)
     var svc2 = new Vigil.Services.HeartbeatService ();
     // consecutive_failures is read-only from outside, but we can check
     // the message format when it's 0 (no recovery message)

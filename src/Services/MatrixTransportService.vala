@@ -29,7 +29,6 @@
  */
 public class Vigil.Services.MatrixTransportService : Object {
 
-    public signal void screenshot_sent (string file_path, string event_id);
     public signal void screenshot_send_failed (string file_path, string error_message);
 
     /** Matrix homeserver URL (trailing slash stripped automatically). */
@@ -63,6 +62,12 @@ public class Vigil.Services.MatrixTransportService : Object {
             return url.substring (0, url.length - 1);
         }
         return url;
+    }
+
+    private void set_auth_header (Soup.Message message) {
+        message.get_request_headers ().append (
+            "Authorization", "Bearer %s".printf (access_token)
+        );
     }
 
     private static string safe_log (string? resp) {
@@ -141,9 +146,9 @@ public class Vigil.Services.MatrixTransportService : Object {
                 parser.load_from_data ((string) response_bytes.get_data ());
                 var root = parser.get_root ().get_object ();
 
-                if (root.has_member ("m.homeserver")) {
+                if (root != null && root.has_member ("m.homeserver")) {
                     var hs_obj = root.get_object_member ("m.homeserver");
-                    if (hs_obj.has_member ("base_url")) {
+                    if (hs_obj != null && hs_obj.has_member ("base_url")) {
                         var url = hs_obj.get_string_member ("base_url");
                         if (!url.has_prefix ("https://")) {
                             warning ("Discovered homeserver URL is not HTTPS: %s", url);
@@ -215,15 +220,15 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
+            var resp_str = (string) response_bytes.get_data ();
 
             if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Matrix login failed (HTTP %u): %s", status, safe_log (resp));
+                warning ("Matrix login failed (HTTP %u): %s", status, safe_log (resp_str));
                 return null;
             }
 
             var parser = new Json.Parser ();
-            parser.load_from_data ((string) response_bytes.get_data ());
+            parser.load_from_data (resp_str);
             var root = parser.get_root ().get_object ();
 
             if (root.has_member ("access_token")) {
@@ -328,21 +333,19 @@ public class Vigil.Services.MatrixTransportService : Object {
                 "application/json",
                 new Bytes (body_json.data)
             );
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
+            var resp_str = (string) response_bytes.get_data ();
 
             if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Matrix room creation failed (HTTP %u): %s", status, safe_log (resp));
+                warning ("Matrix room creation failed (HTTP %u): %s", status, safe_log (resp_str));
                 return null;
             }
 
             var parser = new Json.Parser ();
-            parser.load_from_data ((string) response_bytes.get_data ());
+            parser.load_from_data (resp_str);
             var root = parser.get_root ().get_object ();
 
             if (root.has_member ("room_id")) {
@@ -420,9 +423,7 @@ public class Vigil.Services.MatrixTransportService : Object {
                 "application/json",
                 new Bytes (body_json.data)
             );
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (
                 message, Priority.DEFAULT, null
@@ -467,9 +468,7 @@ public class Vigil.Services.MatrixTransportService : Object {
                 "application/json",
                 new Bytes (keys_json.data)
             );
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
@@ -525,9 +524,7 @@ public class Vigil.Services.MatrixTransportService : Object {
                 "application/json",
                 new Bytes (body_json.data)
             );
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
@@ -587,9 +584,7 @@ public class Vigil.Services.MatrixTransportService : Object {
                 "application/json",
                 new Bytes (body_json.data)
             );
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
@@ -640,9 +635,7 @@ public class Vigil.Services.MatrixTransportService : Object {
                 "application/json",
                 new Bytes (body.data)
             );
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
@@ -681,21 +674,19 @@ public class Vigil.Services.MatrixTransportService : Object {
 
             var message = new Soup.Message ("POST", upload_url);
             message.set_request_body_from_bytes (content_type, data);
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
+            var resp_str = (string) response_bytes.get_data ();
 
             if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Matrix media upload failed (HTTP %u): %s", status, safe_log (resp));
+                warning ("Matrix media upload failed (HTTP %u): %s", status, safe_log (resp_str));
                 return null;
             }
 
             var parser = new Json.Parser ();
-            parser.load_from_data ((string) response_bytes.get_data ());
+            parser.load_from_data (resp_str);
             var root = parser.get_root ().get_object ();
 
             if (root.has_member ("content_uri")) {
@@ -758,21 +749,19 @@ public class Vigil.Services.MatrixTransportService : Object {
                 "application/json",
                 new Bytes (actual_content.data)
             );
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
+            var resp_str = (string) response_bytes.get_data ();
 
             if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Matrix send event failed (HTTP %u): %s", status, safe_log (resp));
+                warning ("Matrix send event failed (HTTP %u): %s", status, safe_log (resp_str));
                 return null;
             }
 
             var parser = new Json.Parser ();
-            parser.load_from_data ((string) response_bytes.get_data ());
+            parser.load_from_data (resp_str);
             var root = parser.get_root ().get_object ();
 
             if (root.has_member ("event_id")) {
@@ -976,7 +965,6 @@ public class Vigil.Services.MatrixTransportService : Object {
         }
 
         debug ("Matrix: sent encrypted screenshot %s as %s", filename, event_id);
-        screenshot_sent (filename, event_id);
         return true;
     }
 
@@ -1085,9 +1073,7 @@ public class Vigil.Services.MatrixTransportService : Object {
             );
 
             var message = new Soup.Message ("GET", url);
-            message.get_request_headers ().append (
-                "Authorization", "Bearer %s".printf (access_token)
-            );
+            set_auth_header (message);
 
             var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
             var status = message.get_status ();
@@ -1212,6 +1198,7 @@ public class Vigil.Services.MatrixTransportService : Object {
         // Query partner's device keys
         var query_response = yield query_device_keys (partner_id);
         if (query_response == null) {
+            debug ("share_room_keys: query_device_keys returned null");
             return false;
         }
 
@@ -1221,15 +1208,21 @@ public class Vigil.Services.MatrixTransportService : Object {
             var root = parser.get_root ().get_object ();
 
             if (!root.has_member ("device_keys")) {
+                debug ("share_room_keys: no device_keys in response");
                 return false;
             }
 
             var dk_obj = root.get_object_member ("device_keys");
-            if (!dk_obj.has_member (partner_id)) {
+            if (dk_obj == null || !dk_obj.has_member (partner_id)) {
+                debug ("share_room_keys: no devices for partner %s", partner_id);
                 return false;
             }
 
             var partner_devices = dk_obj.get_object_member (partner_id);
+            if (partner_devices == null) {
+                debug ("share_room_keys: partner_devices object is null");
+                return false;
+            }
             var device_ids = new GenericArray<string> ();
             var device_curve_keys = new HashTable<string, string> (str_hash, str_equal);
             var device_ed_keys = new HashTable<string, string> (str_hash, str_equal);
@@ -1241,6 +1234,9 @@ public class Vigil.Services.MatrixTransportService : Object {
                 }
                 if (dev.has_member ("keys")) {
                     var keys = dev.get_object_member ("keys");
+                    if (keys == null) {
+                        return;
+                    }
                     var curve_key_name = "curve25519:%s".printf (dev_id);
                     var ed_key_name = "ed25519:%s".printf (dev_id);
                     if (keys.has_member (curve_key_name)) {
@@ -1260,6 +1256,7 @@ public class Vigil.Services.MatrixTransportService : Object {
             });
 
             if (device_ids.length == 0) {
+                debug ("share_room_keys: no usable device keys found for partner");
                 return false;
             }
 
@@ -1269,8 +1266,10 @@ public class Vigil.Services.MatrixTransportService : Object {
                 dev_id_array[i] = device_ids[i];
             }
 
+            debug ("share_room_keys: claiming OTKs for %d devices", device_ids.length);
             var claim_response = yield claim_one_time_keys (partner_id, dev_id_array);
             if (claim_response == null) {
+                debug ("share_room_keys: claim_one_time_keys returned null");
                 return false;
             }
 
@@ -1279,19 +1278,26 @@ public class Vigil.Services.MatrixTransportService : Object {
             var claim_root = claim_parser.get_root ().get_object ();
 
             if (!claim_root.has_member ("one_time_keys")) {
+                debug ("share_room_keys: no one_time_keys in claim response");
                 return false;
             }
 
             var otk_obj = claim_root.get_object_member ("one_time_keys");
-            if (!otk_obj.has_member (partner_id)) {
+            if (otk_obj == null || !otk_obj.has_member (partner_id)) {
+                debug ("share_room_keys: no OTKs for partner in claim response");
                 return false;
             }
 
             var partner_otks = otk_obj.get_object_member (partner_id);
+            if (partner_otks == null) {
+                debug ("share_room_keys: partner OTK object is null");
+                return false;
+            }
 
             // Build room key content and parse it once for reuse
             var room_key_json = enc.build_room_key_content (room_id);
             if (room_key_json == null) {
+                debug ("share_room_keys: build_room_key_content returned null (no Megolm session?)");
                 return false;
             }
 
