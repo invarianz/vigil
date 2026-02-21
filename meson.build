@@ -38,7 +38,6 @@ add_project_arguments(
 # Custom VAPI directory for libolm bindings
 add_project_arguments(
     '--vapidir=' + meson.project_source_root() / 'vapi',
-    '--pkg', 'linux',
     language: 'vala'
 )
 

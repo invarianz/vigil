@@ -382,8 +382,8 @@ void test_describe_tamper_event_known () {
     assert_true (result.contains ("settings lock was bypassed"));
 
     result = Vigil.Services.HeartbeatService.describe_tamper_event (
-        "ld_so_preload_detected: /etc/ld.so.preload contains evil.so");
-    assert_true (result.contains ("code injection"));
+        "flatpak_override_detected: overrides file exists");
+    assert_true (result.contains ("permissions"));
 }
 
 void test_describe_tamper_event_unknown () {

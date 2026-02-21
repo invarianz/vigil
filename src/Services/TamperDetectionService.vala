@@ -125,9 +125,8 @@ public class Vigil.Services.TamperDetectionService : Object {
      */
     public void run_all_checks () {
         check_settings_sanity ();
-        check_dumpable ();
-        check_tracer_pid ();
-        SecurityUtils.check_ld_so_preload (null, this);
+        check_flatpak_sandbox ();
+        check_flatpak_overrides ();
         check_display_service ();
         check_capture_liveness ();
         check_orphan_screenshots ();
@@ -510,59 +509,63 @@ public class Vigil.Services.TamperDetectionService : Object {
         emit_tamper (event_type, details);
     }
 
-    /** PID of the display service (Portal/compositor). 0 = unconfigured. */
+    /** PID of the display service (Portal). 0 = unconfigured. */
     public uint32 display_service_pid { get; set; default = 0; }
-
-    /** Executable path of the display service at registration time. */
-    public string display_service_exe { get; set; default = ""; }
 
     /** D-Bus name of the display service (for diagnostics). */
     public string display_service_name { get; set; default = ""; }
 
+    /** Path to the Flatpak overrides file (overridable for tests). */
+    public string flatpak_overrides_path { get; set; default = ""; }
+
     /**
-     * Check that the process dumpable flag hasn't been re-enabled.
+     * Check that the Flatpak sandbox is intact.
      *
-     * If an attacker re-enables PR_SET_DUMPABLE after startup hardening,
-     * this detects it, re-hardens, and fires a tamper event.
+     * /.flatpak-info must exist inside the sandbox. If it's missing,
+     * the daemon is running outside Flatpak (bypassing sandboxing).
      */
-    public void check_dumpable () {
-        var warning_msg = SecurityUtils.check_and_reharden_dumpable ();
-        if (warning_msg != null) {
-            emit_tamper ("dumpable_reactivated", warning_msg);
+    public void check_flatpak_sandbox () {
+        if (!FileUtils.test ("/.flatpak-info", FileTest.EXISTS)) {
+            emit_tamper ("sandbox_escaped",
+                "/.flatpak-info not found -- daemon is running outside Flatpak sandbox");
         }
     }
 
     /**
-     * Check whether another process is tracing this process via ptrace.
+     * Check for Flatpak permission overrides.
      *
-     * Root can ptrace despite PR_SET_DUMPABLE=0 via CAP_SYS_PTRACE.
-     * TracerPid in /proc/self/status is non-zero when actively traced.
+     * A user can run `flatpak override --user` to grant extra permissions
+     * (filesystem access, environment variables, etc.) that weaken the
+     * sandbox. Any override file for this app is suspicious.
      */
-    public void check_tracer_pid () {
-        try {
-            string contents;
-            FileUtils.get_contents ("/proc/self/status", out contents);
-            foreach (var line in contents.split ("\n")) {
-                if (line.has_prefix ("TracerPid:")) {
-                    var pid_str = line.substring (10).strip ();
-                    if (pid_str != "0" && pid_str != "") {
-                        emit_tamper ("ptrace_detected",
-                            "Process is being traced by PID %s".printf (pid_str));
-                    }
-                    break;
-                }
+    public void check_flatpak_overrides () {
+        var path = flatpak_overrides_path;
+        if (path == "") {
+            path = Path.build_filename (
+                Environment.get_home_dir (),
+                ".local", "share", "flatpak", "overrides",
+                "io.github.invarianz.vigil"
+            );
+        }
+
+        if (FileUtils.test (path, FileTest.EXISTS)) {
+            try {
+                string contents;
+                FileUtils.get_contents (path, out contents);
+                emit_tamper ("flatpak_override_detected",
+                    "Flatpak permission overrides are active (sandbox may be weakened)");
+            } catch (Error e) {
+                emit_tamper ("flatpak_override_detected",
+                    "Flatpak overrides file exists but could not be read");
             }
-        } catch (Error e) {
-            // Not actionable
         }
     }
 
     /**
-     * Check that the display service (Portal/compositor) is still running
-     * and hasn't been replaced by a different executable.
+     * Check that the display service (Portal) is still running.
      *
-     * If the PID is gone, the compositor may have crashed or been killed.
-     * If the exe changed, a fake display service may have been substituted.
+     * Inside Flatpak, /proc/<pid>/exe cannot be read for host PIDs
+     * (different PID namespace), so only PID existence is checked.
      */
     public void check_display_service () {
         if (display_service_pid == 0) {
@@ -575,22 +578,6 @@ public class Vigil.Services.TamperDetectionService : Object {
                 "Display service %s (PID %u) is no longer running".printf (
                     display_service_name, display_service_pid));
             display_service_pid = 0;
-            return;
-        }
-
-        var exe_link = "%s/exe".printf (proc_dir);
-        try {
-            var current_exe = FileUtils.read_link (exe_link);
-            if (display_service_exe != "" && current_exe != display_service_exe) {
-                emit_tamper ("display_service_replaced",
-                    "Display service %s (PID %u) exe changed from %s to %s".printf (
-                        display_service_name, display_service_pid,
-                        display_service_exe, current_exe));
-            }
-        } catch (Error e) {
-            // Cannot read exe link -- process may have exited between checks
-            debug ("Could not read exe for display service PID %u: %s",
-                display_service_pid, e.message);
         }
     }
 

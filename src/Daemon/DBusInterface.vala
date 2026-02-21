@@ -491,17 +491,9 @@ public class Vigil.Daemon.DBusServer : Object {
             return;
         }
 
-        string exe = "";
-        try {
-            exe = FileUtils.read_link ("/proc/%u/exe".printf (pid));
-        } catch (Error e) {
-            debug ("Could not read exe for PID %u: %s", pid, e.message);
-        }
-
         _tamper_svc.display_service_pid = pid;
-        _tamper_svc.display_service_exe = exe;
         _tamper_svc.display_service_name = bus_name;
-        debug ("Display service: %s PID=%u exe=%s", bus_name, pid, exe);
+        debug ("Display service: %s PID=%u", bus_name, pid);
     }
 
     /**

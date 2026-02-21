@@ -582,14 +582,6 @@ public class Vigil.Services.HeartbeatService : Object {
                 return "Permission for Vigil to run in the background " +
                     "was revoked. Vigil will stop running when the " +
                     "window is closed and will NOT restart automatically.";
-            case "ld_preload_detected":
-                return "The LD_PRELOAD environment variable is set. " +
-                    "Code is being injected into Vigil to intercept " +
-                    "its operations.";
-            case "prctl_failed":
-                return "Vigil\u2019s memory protection failed to activate. " +
-                    "Vigil\u2019s encryption keys and screenshots " +
-                    "are exposed to other programs.";
             case "screenshot_deleted":
                 return "A screenshot was deleted before it could be " +
                     "sent to you. Someone is destroying evidence.";
@@ -602,27 +594,18 @@ public class Vigil.Services.HeartbeatService : Object {
             case "unmonitored_gap":
                 return "The device was not being monitored for a period " +
                     "of time (see above for details).";
-            case "dumpable_reactivated":
-                return "Vigil\u2019s memory protection was disabled by " +
-                    "another program. Someone is trying to read " +
-                    "Vigil\u2019s encryption keys from memory.";
-            case "ptrace_detected":
-                return "Another program is actively reading Vigil\u2019s " +
-                    "memory. Someone is extracting encryption keys " +
-                    "or manipulating Vigil.";
-            case "ld_so_preload_detected":
-                return "A system-wide code injection file " +
-                    "(/etc/ld.so.preload) is active. Code is being " +
-                    "injected into Vigil to intercept its operations.";
+            case "sandbox_escaped":
+                return "Vigil is running outside its Flatpak sandbox. " +
+                    "All security protections are bypassed \u2014 " +
+                    "screenshots and encryption cannot be trusted.";
+            case "flatpak_override_detected":
+                return "Vigil\u2019s Flatpak permissions have been " +
+                    "modified. The sandbox may be weakened, allowing " +
+                    "tampering that would otherwise be blocked.";
             case "display_service_gone":
                 return "The screenshot service has stopped running. " +
                     "Screenshots are NOT being taken \u2014 activity " +
                     "is going unmonitored.";
-            case "display_service_replaced":
-                return "The screenshot service was replaced with " +
-                    "a different program. Screenshots are NOT genuine " +
-                    "\u2014 they show fake images instead of the " +
-                    "real screen.";
             default:
                 return raw_event;
         }

@@ -841,41 +841,6 @@ void test_file_monitoring_unexpected_deletion () {
     TestUtils.delete_directory_recursive (dir);
 }
 
-void test_dumpable_no_tamper_when_hardened () {
-    // Ensure dumpable is 0 (default in hardened process)
-    Linux.prctl (Linux.PR_SET_DUMPABLE, 0);
-
-    var svc = new Vigil.Services.TamperDetectionService (null);
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => { event_type = t; });
-
-    svc.check_dumpable ();
-    assert_true (event_type == null);
-}
-
-void test_dumpable_detects_reactivation () {
-    // Set dumpable to 1 to simulate attacker re-enabling it
-    Linux.prctl (Linux.PR_SET_DUMPABLE, 1);
-
-    var svc = new Vigil.Services.TamperDetectionService (null);
-
-    string? event_type = null;
-    string? event_details = null;
-    svc.tamper_detected.connect ((t, d) => {
-        event_type = t;
-        event_details = d;
-    });
-
-    svc.check_dumpable ();
-    assert_true (event_type == "dumpable_reactivated");
-    assert_true (event_details.contains ("re-enabled"));
-
-    // Verify it was re-hardened
-    int current = Linux.prctl (Linux.PR_GET_DUMPABLE);
-    assert_true (current == 0);
-}
-
 void test_display_service_no_alarm_unconfigured () {
     var svc = new Vigil.Services.TamperDetectionService (null);
     // pid=0 means unconfigured (headless/CI)
@@ -936,62 +901,40 @@ void test_file_monitoring_stop_is_safe () {
     TestUtils.delete_directory_recursive (dir);
 }
 
-void test_ld_so_preload_no_alarm_when_missing () {
-    var svc = new Vigil.Services.TamperDetectionService (null);
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => { event_type = t; });
-
-    // Use a path that doesn't exist — should not fire
-    Vigil.Services.SecurityUtils.check_ld_so_preload (null, svc,
-        "/tmp/vigil-test-nonexistent-ld-so-preload");
-    assert_true (event_type == null);
-}
-
-void test_ld_so_preload_detects_injection () {
+void test_flatpak_overrides_no_alarm_when_missing () {
     var dir = TestUtils.make_test_dir ();
     DirUtils.create_with_parents (dir, 0755);
-    var fake_preload = Path.build_filename (dir, "ld.so.preload");
-    try {
-        FileUtils.set_contents (fake_preload, "/usr/lib/evil.so\n");
-    } catch (Error e) { assert_not_reached (); }
 
     var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.flatpak_overrides_path = Path.build_filename (dir, "nonexistent");
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
 
-    Vigil.Services.SecurityUtils.check_ld_so_preload (null, svc, fake_preload);
-    assert_true (event_type == "ld_so_preload_detected");
+    svc.check_flatpak_overrides ();
+    assert_true (event_type == null);
 
     TestUtils.delete_directory_recursive (dir);
 }
 
-void test_ld_so_preload_deferred_events () {
+void test_flatpak_overrides_detects_override_file () {
     var dir = TestUtils.make_test_dir ();
     DirUtils.create_with_parents (dir, 0755);
-    var fake_preload = Path.build_filename (dir, "ld.so.preload");
+    var override_file = Path.build_filename (dir, "io.github.invarianz.vigil");
     try {
-        FileUtils.set_contents (fake_preload, "/usr/lib/evil.so\n");
+        FileUtils.set_contents (override_file, "[Context]\nfilesystems=host;\n");
     } catch (Error e) { assert_not_reached (); }
 
-    var events = new GenericArray<string> ();
-    Vigil.Services.SecurityUtils.check_ld_so_preload (events, null, fake_preload);
-    assert_true (events.length == 1);
-    assert_true (events[0].has_prefix ("ld_so_preload_detected:"));
-
-    TestUtils.delete_directory_recursive (dir);
-}
-
-void test_tracer_pid_no_alarm_normally () {
     var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.flatpak_overrides_path = override_file;
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
 
-    // Normal test execution — TracerPid should be 0
-    svc.check_tracer_pid ();
-    assert_true (event_type == null);
+    svc.check_flatpak_overrides ();
+    assert_true (event_type == "flatpak_override_detected");
+
+    TestUtils.delete_directory_recursive (dir);
 }
 
 void test_settings_exact_boundary_triggers_tamper () {
@@ -1104,24 +1047,16 @@ public static int main (string[] args) {
         test_file_monitoring_unexpected_deletion);
     Test.add_func ("/tamper/file_monitoring_stop_is_safe",
         test_file_monitoring_stop_is_safe);
-    Test.add_func ("/tamper/dumpable_no_tamper_when_hardened",
-        test_dumpable_no_tamper_when_hardened);
-    Test.add_func ("/tamper/dumpable_detects_reactivation",
-        test_dumpable_detects_reactivation);
     Test.add_func ("/tamper/display_service_no_alarm_unconfigured",
         test_display_service_no_alarm_unconfigured);
     Test.add_func ("/tamper/display_service_detects_gone_pid",
         test_display_service_detects_gone_pid);
     Test.add_func ("/tamper/display_service_valid_pid",
         test_display_service_valid_pid);
-    Test.add_func ("/tamper/ld_so_preload_no_alarm_when_missing",
-        test_ld_so_preload_no_alarm_when_missing);
-    Test.add_func ("/tamper/ld_so_preload_detects_injection",
-        test_ld_so_preload_detects_injection);
-    Test.add_func ("/tamper/ld_so_preload_deferred_events",
-        test_ld_so_preload_deferred_events);
-    Test.add_func ("/tamper/tracer_pid_no_alarm_normally",
-        test_tracer_pid_no_alarm_normally);
+    Test.add_func ("/tamper/flatpak_overrides_no_alarm_when_missing",
+        test_flatpak_overrides_no_alarm_when_missing);
+    Test.add_func ("/tamper/flatpak_overrides_detects_override",
+        test_flatpak_overrides_detects_override_file);
     Test.add_func ("/tamper/settings_exact_boundary_triggers",
         test_settings_exact_boundary_triggers_tamper);
     Test.add_func ("/tamper/warning_report_method",
