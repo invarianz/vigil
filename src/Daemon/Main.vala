@@ -125,9 +125,6 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         // alert so the partner knows encryption is broken. This is more
         // visible than a log warning that nobody reads.
         if (e2ee_expected && !e2ee_ok) {
-            _tamper_svc.tamper_detected.connect ((event_type, details) => {
-                // Will be delivered once Matrix transport is configured
-            });
             _heartbeat_svc.report_tamper_event (
                 "E2EE initialization failed -- screenshots will NOT be sent " +
                 "until encryption is restored (pickle file may be corrupt " +

@@ -289,7 +289,7 @@ public class Vigil.Services.HeartbeatService : Object {
             }
             for (int i = start_idx; i < display_events.length; i++) {
                 if (sb.len > 55000) {
-                    sb.append ("  ... (truncated)\n");
+                    sb.append ("  \u2026 (truncated)\n");
                     break;
                 }
                 sb.append_printf ("  * %s\n", describe_tamper_event (display_events[i]));

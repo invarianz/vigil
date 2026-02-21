@@ -15,8 +15,8 @@ public class Vigil.Services.SecurityUtils : Object {
     /** Maximum screenshot file size (50 MB). */
     public const int64 MAX_SCREENSHOT_SIZE = 50 * 1024 * 1024;
 
-    /** Hex lookup table — avoids printf format parsing per byte. */
-    private const string[] HEX_TABLE = {
+    /** Hex lookup table -- avoids printf format parsing per byte. */
+    public const string[] HEX_TABLE = {
         "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "0a", "0b", "0c", "0d", "0e", "0f",
         "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "1a", "1b", "1c", "1d", "1e", "1f",
         "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "2a", "2b", "2c", "2d", "2e", "2f",
@@ -132,6 +132,17 @@ public class Vigil.Services.SecurityUtils : Object {
     public static void write_secure_file (string path, string contents) throws Error {
         FileUtils.set_contents (path, contents);
         FileUtils.chmod (path, 0600);
+    }
+
+    /**
+     * Encode a byte array as a lowercase hex string.
+     */
+    public static string bytes_to_hex (uint8[] data) {
+        var sb = new StringBuilder.sized (data.length * 2);
+        foreach (var b in data) {
+            sb.append (HEX_TABLE[b]);
+        }
+        return sb.str;
     }
 
     /**

@@ -860,7 +860,7 @@ public class Vigil.Services.MatrixTransportService : Object {
         // PNG: 8-byte signature, then IHDR chunk: 4-byte length, 4-byte "IHDR",
         // 4-byte width (big-endian), 4-byte height (big-endian) → offsets 16..23
         if (data.length >= 24) {
-            width  = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
+            width = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
             height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23];
         }
     }
@@ -1021,7 +1021,8 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         var plain = "WARNING: %s\n\nIf you did not authorize this change, please investigate."
             .printf (friendly);
-        var html = "<strong>WARNING:</strong> %s<br><br><em>If you did not authorize this change, please investigate.</em>"
+        var html = ("<strong>WARNING:</strong> %s<br><br>" +
+            "<em>If you did not authorize this change, please investigate.</em>")
             .printf (Markup.escape_text (friendly));
 
         var builder = new Json.Builder ();
