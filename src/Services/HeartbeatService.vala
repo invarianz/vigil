@@ -43,7 +43,6 @@
 public class Vigil.Services.HeartbeatService : Object {
 
     public signal void heartbeat_sent (DateTime timestamp);
-    public signal void heartbeat_failed (string error_message);
     public signal void gap_detected (int64 gap_seconds);
 
     /** Heartbeat interval in seconds. */
@@ -515,7 +514,6 @@ public class Vigil.Services.HeartbeatService : Object {
      */
     public async bool send_heartbeat () {
         if (_matrix_svc == null || !_matrix_svc.is_configured) {
-            heartbeat_failed ("Matrix transport not configured");
             return false;
         }
 
@@ -538,7 +536,6 @@ public class Vigil.Services.HeartbeatService : Object {
             return true;
         } else {
             consecutive_failures++;
-            heartbeat_failed ("Failed to send heartbeat via Matrix");
             return false;
         }
     }

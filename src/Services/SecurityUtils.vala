@@ -155,11 +155,7 @@ public class Vigil.Services.SecurityUtils : Object {
         var hash = new uint8[32];
         uint md_size;
         OpenSSL.digest (data, data.length, hash, out md_size, OpenSSL.sha256 ());
-        var sb = new StringBuilder.sized (64);
-        for (int i = 0; i < 32; i++) {
-            sb.append (HEX_TABLE[hash[i]]);
-        }
-        return sb.str;
+        return bytes_to_hex (hash);
     }
 
     /**
@@ -175,11 +171,7 @@ public class Vigil.Services.SecurityUtils : Object {
             (void*) key, key.length,
             (void*) data, data.length,
             (void*) md, out md_len);
-        var sb = new StringBuilder.sized (64);
-        for (int i = 0; i < 32; i++) {
-            sb.append (HEX_TABLE[md[i]]);
-        }
-        return sb.str;
+        return bytes_to_hex (md);
     }
 
     /**

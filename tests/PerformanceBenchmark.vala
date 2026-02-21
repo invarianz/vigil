@@ -30,25 +30,8 @@
 string bench_data_dir;
 string crypto_dir;
 
-/** Hex lookup table (matches SecurityUtils.HEX_TABLE). */
-const string[] HEX_TABLE = {
-    "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "0a", "0b", "0c", "0d", "0e", "0f",
-    "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "1a", "1b", "1c", "1d", "1e", "1f",
-    "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "2a", "2b", "2c", "2d", "2e", "2f",
-    "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "3a", "3b", "3c", "3d", "3e", "3f",
-    "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "4a", "4b", "4c", "4d", "4e", "4f",
-    "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "5a", "5b", "5c", "5d", "5e", "5f",
-    "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "6a", "6b", "6c", "6d", "6e", "6f",
-    "70", "71", "72", "73", "74", "75", "76", "77", "78", "79", "7a", "7b", "7c", "7d", "7e", "7f",
-    "80", "81", "82", "83", "84", "85", "86", "87", "88", "89", "8a", "8b", "8c", "8d", "8e", "8f",
-    "90", "91", "92", "93", "94", "95", "96", "97", "98", "99", "9a", "9b", "9c", "9d", "9e", "9f",
-    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "aa", "ab", "ac", "ad", "ae", "af",
-    "b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "ba", "bb", "bc", "bd", "be", "bf",
-    "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "ca", "cb", "cc", "cd", "ce", "cf",
-    "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "da", "db", "dc", "dd", "de", "df",
-    "e0", "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "ea", "eb", "ec", "ed", "ee", "ef",
-    "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "fa", "fb", "fc", "fd", "fe", "ff"
-};
+/** Alias for SecurityUtils.HEX_TABLE. */
+unowned string[] hex_table = Vigil.Services.SecurityUtils.HEX_TABLE;
 
 delegate void BenchBody ();
 
@@ -678,7 +661,7 @@ void bench_base64url_current () {
     var data = new uint8[32];
     for (int i = 0; i < 32; i++) data[i] = (uint8)(i * 7 + 0xAB);
 
-    bench ("base64url (current: encode+strip+replace)", 5000, () => {
+    bench ("base64url (old: encode+strip+replace)", 5000, () => {
         // Current implementation path:
         var encoded = Base64.encode (data);
         while (encoded.has_suffix ("=")) {
@@ -800,7 +783,7 @@ void bench_sha256_openssl_hex_2mb () {
         OpenSSL.digest (data, data.length, sha256, out md_size, OpenSSL.sha256 ());
         var sb = new StringBuilder.sized (64);
         for (int i = 0; i < 32; i++) {
-            sb.append (HEX_TABLE[sha256[i]]);
+            sb.append (hex_table[sha256[i]]);
         }
         var _hex = sb.str;
     });
@@ -810,7 +793,7 @@ void bench_sha256_glib_hex_2mb () {
     var data = new uint8[2 * 1024 * 1024];
     for (int i = 0; i < data.length; i++) data[i] = (uint8)(i & 0xFF);
 
-    bench ("SHA-256 hex: GLib.Checksum (current)", 100, () => {
+    bench ("SHA-256 hex: GLib.Checksum (reference)", 100, () => {
         Checksum.compute_for_data (ChecksumType.SHA256, data);
     });
 }
@@ -852,7 +835,7 @@ void bench_integrity_verify_openssl () {
     uint ref_size;
     OpenSSL.digest (data, data.length, ref_hash, out ref_size, OpenSSL.sha256 ());
     var ref_sb = new StringBuilder.sized (64);
-    for (int i = 0; i < 32; i++) ref_sb.append (HEX_TABLE[ref_hash[i]]);
+    for (int i = 0; i < 32; i++) ref_sb.append (hex_table[ref_hash[i]]);
     var stored_hash = ref_sb.str;
 
     bench ("integrity verify: file read + OpenSSL SHA-256", 50, () => {
@@ -863,7 +846,7 @@ void bench_integrity_verify_openssl () {
             uint md_size;
             OpenSSL.digest (file_data, file_data.length, sha256, out md_size, OpenSSL.sha256 ());
             var sb = new StringBuilder.sized (64);
-            for (int i = 0; i < 32; i++) sb.append (HEX_TABLE[sha256[i]]);
+            for (int i = 0; i < 32; i++) sb.append (hex_table[sha256[i]]);
             var _match = (sb.str == stored_hash);
         } catch (Error e) {}
     });
@@ -921,7 +904,7 @@ void bench_upload_pipeline_single_read () {
     uint ref_size;
     OpenSSL.digest (data, data.length, ref_hash, out ref_size, OpenSSL.sha256 ());
     var ref_sb = new StringBuilder.sized (64);
-    for (int i = 0; i < 32; i++) ref_sb.append (HEX_TABLE[ref_hash[i]]);
+    for (int i = 0; i < 32; i++) ref_sb.append (hex_table[ref_hash[i]]);
     var stored_hash = ref_sb.str;
 
     bench ("upload path: 1 read + 1 OpenSSL hash + encrypt", 20, () => {
@@ -935,7 +918,7 @@ void bench_upload_pipeline_single_read () {
             uint md_size;
             OpenSSL.digest (file_data, file_data.length, sha256, out md_size, OpenSSL.sha256 ());
             var sb = new StringBuilder.sized (64);
-            for (int i = 0; i < 32; i++) sb.append (HEX_TABLE[sha256[i]]);
+            for (int i = 0; i < 32; i++) sb.append (hex_table[sha256[i]]);
             if (sb.str != stored_hash) return;
 
             // Encrypt same buffer (no re-read)
@@ -1022,7 +1005,7 @@ void bench_hex_lookup_table () {
     bench ("hex encode 32B (lookup table)", 5000, () => {
         var sb = new StringBuilder.sized (64);
         for (int i = 0; i < 32; i++) {
-            sb.append (HEX_TABLE[data[i]]);
+            sb.append (hex_table[data[i]]);
         }
         var _hex = sb.str;
     });
