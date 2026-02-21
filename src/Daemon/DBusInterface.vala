@@ -58,8 +58,7 @@ public class Vigil.Daemon.DBusServer : Object {
 
     private Queue<string> _recent_tamper_events;
     private int _cached_pending_count = 0;
-    private uint _batch_upload_source = 0;
-    private int _batch_upload_interval = 600;
+    private uint _pending_retry_source = 0;
     private uint _background_portal_source = 0;
     private uint _key_sharing_source = 0;
     private bool _room_keys_shared = false;
@@ -247,13 +246,9 @@ public class Vigil.Daemon.DBusServer : Object {
             start_monitoring ();
         }
 
-        // Update cached pending count
+        // Upload any pending screenshots from previous sessions
         refresh_pending_count ();
-
-        // Start batch upload timer
-        _batch_upload_interval = _settings.get_int ("upload-batch-interval-seconds");
         yield flush_pending_uploads ();
-        schedule_batch_upload ();
 
         // Request background/autostart permission via XDG portal (Flatpak)
         yield request_background_portal ();
@@ -341,7 +336,6 @@ public class Vigil.Daemon.DBusServer : Object {
         _scheduler_svc.min_interval_seconds = _settings.get_int ("min-interval-seconds");
         _scheduler_svc.max_interval_seconds = _settings.get_int ("max-interval-seconds");
         _heartbeat_svc.interval_seconds = _settings.get_int ("heartbeat-interval-seconds");
-        _batch_upload_interval = _settings.get_int ("upload-batch-interval-seconds");
 
         // Matrix transport settings
         _matrix_svc.homeserver_url = _settings.get_string ("matrix-homeserver-url");
@@ -425,7 +419,12 @@ public class Vigil.Daemon.DBusServer : Object {
         // does that during setup. If the pickle isn't written yet (race with
         // GUI), we retry shortly.
         if (enc.initialize (pickle_key, true)) {
-            enc.restore_group_session ();
+            // Restore or create Megolm outbound session — without this,
+            // share_room_keys() cannot build room key content and will
+            // fail indefinitely on first launch.
+            if (!enc.restore_group_session ()) {
+                enc.create_outbound_group_session ();
+            }
             // Wire up encryption for config hash signing in heartbeats
             _heartbeat_svc.encryption = enc;
             debug ("E2EE (re)initialized from settings (session: %s)", enc.megolm_session_id);
@@ -484,16 +483,8 @@ public class Vigil.Daemon.DBusServer : Object {
             return;
         }
 
-        string? bus_name = null;
-        if (backend == "Portal") {
-            bus_name = "org.freedesktop.portal.Desktop";
-        } else if (backend == "Gala") {
-            bus_name = "org.pantheon.gala";
-        }
-
-        if (bus_name == null) {
-            return;
-        }
+        // Portal is the only backend (Flatpak-only app)
+        string bus_name = "org.freedesktop.portal.Desktop";
 
         var pid = yield get_dbus_name_pid (bus_name);
         if (pid == 0) {
@@ -582,8 +573,18 @@ public class Vigil.Daemon.DBusServer : Object {
         bool success = yield _screenshot_svc.take_screenshot (path);
 
         if (success) {
+            // Read file ONCE — reuse for both pending marking and immediate upload.
+            // Eliminates a redundant 2MB read + SHA-256 recomputation.
+            uint8[] file_data;
             try {
-                _storage_svc.mark_pending (path);
+                FileUtils.get_data (path, out file_data);
+            } catch (Error e) {
+                warning ("Failed to read screenshot %s: %s", path, e.message);
+                return;
+            }
+
+            try {
+                _storage_svc.mark_pending (path, file_data);
             } catch (Error e) {
                 warning ("Failed to mark screenshot as pending: %s", e.message);
             }
@@ -591,15 +592,66 @@ public class Vigil.Daemon.DBusServer : Object {
             refresh_pending_count ();
             status_changed ();
             _storage_svc.cleanup_old_screenshots ();
+
+            // Upload using pre-loaded data (avoids redundant 2MB read)
+            yield upload_screenshot (path, file_data);
         }
     }
 
-    private void schedule_batch_upload () {
-        _batch_upload_source = Timeout.add_seconds ((uint) _batch_upload_interval, () => {
-            _batch_upload_source = 0;
-            flush_pending_uploads.begin ();
+    /**
+     * Upload a single screenshot immediately after capture.
+     *
+     * @param file_path Path to the screenshot file.
+     * @param preloaded_data If non-null, uses this pre-loaded file data
+     *                       instead of reading from disk. Avoids a redundant
+     *                       2MB read when called from handle_capture().
+     */
+    private async void upload_screenshot (string file_path, uint8[]? preloaded_data = null) {
+        uint8[] file_data;
+        if (preloaded_data != null) {
+            file_data = preloaded_data;
+        } else {
+            try {
+                FileUtils.get_data (file_path, out file_data);
+            } catch (Error e) {
+                debug ("Could not read screenshot %s: %s", file_path, e.message);
+                return;
+            }
+        }
 
-            schedule_batch_upload ();
+        if (!_storage_svc.verify_screenshot_integrity_from_data (file_path, file_data)) {
+            _tamper_svc.report_tamper ("screenshot_tampered",
+                "Screenshot file was modified after capture: %s".printf (
+                    Path.get_basename (file_path)));
+            _storage_svc.mark_uploaded (file_path);
+            return;
+        }
+
+        if (_matrix_svc.is_configured) {
+            var now = new DateTime.now_local ();
+            bool delivered = yield _matrix_svc.send_screenshot_data (
+                (owned) file_data, file_path, now);
+            if (delivered) {
+                _storage_svc.mark_uploaded (file_path);
+                refresh_pending_count ();
+            } else {
+                // Upload failed — schedule a retry for all pending
+                schedule_pending_retry ();
+            }
+        }
+    }
+
+    /**
+     * Schedule a retry for pending uploads (e.g., after a failed immediate upload).
+     * Retries once after 60 seconds; no recurring timer.
+     */
+    private void schedule_pending_retry () {
+        if (_pending_retry_source != 0) {
+            return;
+        }
+        _pending_retry_source = Timeout.add_seconds (60, () => {
+            _pending_retry_source = 0;
+            flush_pending_uploads.begin ();
             return Source.REMOVE;
         });
     }
@@ -650,6 +702,12 @@ public class Vigil.Daemon.DBusServer : Object {
         }
 
         refresh_pending_count ();
+
+        // If any uploads failed, schedule another retry
+        var remaining = _storage_svc.get_pending_screenshots ();
+        if (remaining.length > 0) {
+            schedule_pending_retry ();
+        }
     }
 
     /**
