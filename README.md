@@ -37,20 +37,18 @@ Your partner doesn't need any technical knowledge. They just watch for screensho
 - **Unpredictable timing** -- screenshots are taken at random intervals so they can't be anticipated
 - **End-to-end encrypted** -- screenshots are encrypted on your device before upload; the server never sees them
 - **One-click setup** -- enter your account details, click Setup, and Vigil handles login, room creation, and encryption automatically
-- **Tamper detection** -- alerts your partner if the daemon is stopped, autostart is removed, settings are changed via dconf, or the binary is modified. Distinguishes between **tamper attempts** (bold red) and **warnings** (orange) based on severity
+- **Tamper detection** -- alerts your partner if the daemon is stopped, settings are changed via dconf, the Flatpak sandbox is weakened, or files are modified. Distinguishes between **tamper attempts** (bold red) and **warnings** (orange) based on severity
 - **Dead man's switch** -- heartbeat messages include a "next check-in by" deadline so your partner knows exactly when to expect the next update
 - **Offline resilience** -- queues screenshots for delivery when offline, retries on reconnect
 - **Settings lock** -- after setup, settings are locked behind a code that only your partner knows
-- **Works on X11 and Wayland** -- dual screenshot backend for elementary OS 7 and 8
-- **Flatpak-ready** -- uses XDG Background portal for autostart; detects if permission is revoked
-- **Runs as a system service** -- keeps running even when the GUI is closed, restarts automatically if killed (via systemd on native installs, or XDG Background portal in Flatpak)
-- **Local storage** -- screenshots are kept on disk at `~/.local/share/io.github.invarianz.vigil/screenshots/` so you can verify captures even without Matrix configured
+- **Flatpak sandboxed** -- runs inside a Flatpak sandbox with seccomp, separate PID/mount namespaces, and restricted filesystem access. Detects sandbox escapes and permission overrides
+- **Persistent background service** -- keeps running even when the GUI is closed, restarts automatically via XDG Background portal autostart
 
 ## Getting started
 
 ### What you'll need
 
-- **You**: elementary OS 7 or 8 with Vigil installed
+- **You**: elementary OS 7 or 8 with Vigil installed (via Flatpak)
 - **Your partner**: any device with [Element](https://element.io/) installed (phone or computer)
 - **Matrix accounts** for both of you -- free accounts at [matrix.org](https://app.element.io) work fine, or you can self-host for maximum privacy
 
@@ -90,7 +88,7 @@ To change settings later, you'll need to ask your partner for the code. If someo
 
 ### Step 4: Enable monitoring
 
-Switch to the Status tab and enable monitoring. Vigil starts capturing in the background and keeps running as a system service, even after you close the window.
+Switch to the Status tab and enable monitoring. Vigil starts capturing in the background and keeps running even after you close the window.
 
 ## What your partner sees
 
@@ -149,11 +147,11 @@ Screenshots taken while offline are queued and delivered as soon as the connecti
 
 ### Tamper alerts
 
-Vigil distinguishes two severity levels. **Tamper attempts** (bold red) indicate active circumvention -- someone bypassing the UI to edit settings, removing autostart, or modifying files. **Warnings** (orange) indicate system issues or legitimate changes made while settings are unlocked.
+Vigil distinguishes two severity levels. **Tamper attempts** (bold red) indicate active circumvention -- someone bypassing the UI to edit settings, weakening the sandbox, or modifying files. **Warnings** (orange) indicate system issues or legitimate changes made while settings are unlocked.
 
 Alerts are sent immediately -- they don't wait for the next heartbeat:
 
-> **TAMPER ATTEMPT:** Vigil's autostart was removed. Vigil will not start automatically after the next reboot.
+> **TAMPER ATTEMPT:** The settings lock was bypassed. Someone may have unlocked settings via dconf instead of the GUI.
 >
 > *If you did not authorize this change, please investigate.*
 
@@ -163,37 +161,29 @@ Warnings look different:
 
 Here are the types of problems Vigil can detect:
 
-**Always a tamper attempt** (active attack):
+**Always a tamper attempt** (active circumvention):
 
 | What your partner sees | What it means |
 |---|---|
-| Vigil's autostart was removed | Someone deleted the autostart entry |
-| Vigil's autostart was modified | The autostart file was changed |
-| Vigil's background service was disabled | systemd service was stopped/disabled |
-| The settings lock was bypassed | Someone unlocked settings (fires on lock→unlock transition) |
+| The settings lock was bypassed | Someone unlocked settings via dconf instead of the GUI |
 | The unlock code was cleared | Someone removed the unlock code via dconf |
-| All connection settings were deleted | Matrix transport was wiped (only after initial setup) |
+| All connection settings were deleted | Matrix transport was wiped (only fires after initial setup) |
 | Connection settings are partially cleared | Some Matrix keys were selectively removed |
 | Screenshot timing was tampered with | Interval set outside valid range (< 30s, > 120s, or gap < 30s) via dconf |
 | A screenshot was modified after it was taken | Someone edited a screenshot before upload |
 | A screenshot was unexpectedly deleted | A screenshot was removed before it could be sent |
 | A pending upload marker was deleted | Upload tracking was tampered with |
 | The capture counter was tampered with | Lifetime screenshot count was modified |
-| Encryption state files were tampered with | Crypto files were modified on disk |
-| The Vigil program file was deleted | Someone may be uninstalling Vigil |
-| The Vigil program file was replaced or modified | The binary was changed |
-| A security protection was re-disabled | `PR_SET_DUMPABLE` was turned back on after Vigil disabled it |
-| A debugger was attached | `ptrace` detected -- someone is inspecting Vigil's memory |
-| LD_PRELOAD injection detected | A library was injected via environment variable |
-| /etc/ld.so.preload injection detected | A library was injected via system preload file |
-| The screenshot service was replaced | Display server executable changed |
+| Encryption state files were tampered with | Crypto files were deleted on disk |
+| Vigil is running outside the sandbox | `/.flatpak-info` is missing -- sandbox was bypassed |
+| Flatpak permissions were modified | Override file detected -- sandbox may be weakened |
+| Many screenshots have no upload marker | Markers may have been systematically deleted |
 
 **Tamper if locked, warning if unlocked** (settings changes):
 
 | What your partner sees | What it means |
 |---|---|
 | Screenshot monitoring was turned off | Monitoring was disabled |
-| Screenshot timing was changed | Interval settings were modified (within valid range) |
 | Your partner ID was changed or removed | Partner Matrix ID was cleared |
 | Encryption keys were deleted | E2EE pickle key was cleared |
 | Service timer was changed | Heartbeat, upload, or tamper-check interval was set very high |
@@ -202,13 +192,13 @@ Here are the types of problems Vigil can detect:
 
 | What your partner sees | What it means |
 |---|---|
-| No screenshot was taken when expected | Capture may have stalled |
+| No screenshot was taken when expected | Capture may have stalled (portal denied, compositor crash) |
 | Disk space is critically low | Less than 50 MB free |
 | Encryption failed to start | E2EE initialization error |
 | Permission to run in the background was revoked | XDG Background portal permission lost |
-| The screenshot service is no longer running | Display server process exited |
+| The screenshot service is no longer running | Display server / portal process exited |
 | Device was unmonitored for a period | Gap detected (sleep, shutdown, or outage) |
-| A security hardening call failed | `prctl` call failed (non-critical) |
+| Settings unlocked with correct code | Authorized unlock via GUI (partner should verify they gave the code) |
 
 The next heartbeat will also include any alerts that occurred since the last update, so nothing is missed even if an individual alert fails to send.
 
@@ -243,12 +233,12 @@ Vigil implements the Matrix end-to-end encryption protocol natively using libolm
 
 Vigil runs as two processes:
 
-- **vigil-daemon** -- a background system service that captures screenshots, encrypts them, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
+- **vigil-daemon** -- a background service (inside the Flatpak sandbox) that captures screenshots, encrypts them, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
 - **vigil** -- a GTK 4 app for status and settings. Connects to the daemon over D-Bus. Handles one-time setup.
 
 ### What happens when a screenshot is taken
 
-1. The screen is captured via Gala D-Bus on the desktop, or XDG Desktop Portal inside Flatpak
+1. The screen is captured via the XDG Desktop Portal (inside the Flatpak sandbox)
 2. The PNG is encrypted with a fresh random AES-256-CTR key and IV, then a SHA-256 hash of the ciphertext is computed for integrity verification
 3. The encrypted blob is uploaded to the Matrix content repository
 4. The event JSON (containing the download URL, decryption key, IV, and hash) is encrypted with the room's Megolm session
@@ -281,23 +271,18 @@ AES-256-CTR key (per-screenshot, ephemeral)
 # Install dependencies (elementary OS 8 / Ubuntu 24.04)
 sudo apt install valac meson libgranite-7-dev libgtk-4-dev \
   libjson-glib-dev libsoup-3.0-dev libportal-dev libportal-gtk4-dev \
-  libolm-dev libssl-dev
+  libolm-dev libssl-dev flatpak-builder
 
-# Build
+# Build and install as Flatpak (recommended)
+flatpak-builder --user --install --force-clean flatpak-build io.github.invarianz.vigil.yml
+
+# Or build locally for development (tests only -- screenshots require Flatpak)
 meson setup build
 meson compile -C build
-
-# Run tests
 meson test -C build
-
-# Install
-sudo meson install -C build
-
-# Enable the daemon (native install)
-systemctl --user enable --now vigil-daemon.service
 ```
 
-When running as a Flatpak, the daemon uses the XDG Background portal instead of systemd. Autostart is requested automatically on first launch -- no manual service setup is needed.
+The daemon uses the XDG Background portal for autostart -- no manual service setup is needed. Autostart is requested automatically on first launch.
 
 ## License
 
