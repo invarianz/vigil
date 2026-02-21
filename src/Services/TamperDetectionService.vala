@@ -84,9 +84,6 @@ public class Vigil.Services.TamperDetectionService : Object {
         }
     }
 
-    construct {
-    }
-
     /**
      * Start periodic tamper detection checks.
      */

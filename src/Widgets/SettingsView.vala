@@ -398,7 +398,9 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
                    "Refusing to fall back to weak hashing.", result);
         }
 
-        return "%s:%s".printf (bytes_to_hex (salt), bytes_to_hex (derived));
+        return "%s:%s".printf (
+            Vigil.Services.SecurityUtils.bytes_to_hex (salt),
+            Vigil.Services.SecurityUtils.bytes_to_hex (derived));
     }
 
     /**
@@ -411,7 +413,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         if (":" in stored_hash) {
             var parts = stored_hash.split (":");
             if (parts.length != 2) return false;
-            var salt = hex_to_bytes (parts[0]);
+            var salt = Vigil.Services.SecurityUtils.hex_to_bytes (parts[0]);
             if (salt == null) return false;
             var expected = hash_code_with_salt (code, salt);
             return constant_time_equal (expected, stored_hash);
@@ -437,14 +439,6 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             result |= (uint8) (a[i] ^ b[i]);
         }
         return result == 0;
-    }
-
-    private static string bytes_to_hex (uint8[] data) {
-        return Vigil.Services.SecurityUtils.bytes_to_hex (data);
-    }
-
-    private static uint8[]? hex_to_bytes (string hex) {
-        return Vigil.Services.SecurityUtils.hex_to_bytes (hex);
     }
 
     /**
