@@ -37,7 +37,7 @@ Your partner doesn't need any technical knowledge. They just watch for screensho
 - **Unpredictable timing** -- screenshots are taken at random intervals so they can't be anticipated
 - **End-to-end encrypted** -- screenshots are encrypted on your device before upload; the server never sees them
 - **One-click setup** -- enter your account details, click Setup, and Vigil handles login, room creation, and encryption automatically
-- **Tamper detection** -- alerts your partner if the daemon is stopped, autostart is removed, settings are changed, or the binary is modified
+- **Tamper detection** -- alerts your partner if the daemon is stopped, autostart is removed, settings are changed via dconf, or the binary is modified. Distinguishes between **tamper attempts** (bold red) and **warnings** (orange) based on severity
 - **Dead man's switch** -- heartbeat messages include a "next check-in by" deadline so your partner knows exactly when to expect the next update
 - **Offline resilience** -- queues screenshots for delivery when offline, retries on reconnect
 - **Settings lock** -- after setup, settings are locked behind a code that only your partner knows
@@ -58,7 +58,7 @@ Your partner doesn't need any technical knowledge. They just watch for screensho
 
 Open Vigil and go to Settings. Fill in:
 
-1. **Homeserver** -- your Matrix server (e.g. `matrix.org`)
+1. **Matrix Server** -- your Matrix server (e.g. `matrix.org`)
 2. **Username** -- your Matrix username
 3. **Password** -- your Matrix password
 4. **Partner Matrix ID** -- your partner's Matrix ID (e.g. `@partner:matrix.org`)
@@ -149,35 +149,68 @@ Screenshots taken while offline are queued and delivered as soon as the connecti
 
 ### Tamper alerts
 
-If someone tries to interfere with Vigil, a warning is sent immediately -- it doesn't wait for the next heartbeat:
+Vigil distinguishes two severity levels. **Tamper attempts** (bold red) indicate active circumvention -- someone bypassing the UI to edit settings, removing autostart, or modifying files. **Warnings** (orange) indicate system issues or legitimate changes made while settings are unlocked.
 
-> **WARNING:** Vigil's autostart was removed. Vigil will not start automatically after the next reboot.
+Alerts are sent immediately -- they don't wait for the next heartbeat:
+
+> **TAMPER ATTEMPT:** Vigil's autostart was removed. Vigil will not start automatically after the next reboot.
 >
 > *If you did not authorize this change, please investigate.*
 
-All warnings use plain language so your partner knows exactly what happened. Here are the types of problems Vigil can detect:
+Warnings look different:
+
+> Warning: No screenshot was taken when expected. The screenshot system may have stopped working.
+
+Here are the types of problems Vigil can detect:
+
+**Always a tamper attempt** (active attack):
 
 | What your partner sees | What it means |
 |---|---|
-| Screenshot monitoring was turned off | Someone disabled the monitoring feature |
-| Screenshot timing was changed to take very few screenshots | Monitoring coverage was reduced |
-| All connection settings were deleted | Vigil can no longer send messages or screenshots |
-| Your partner ID was changed or removed | Messages may no longer reach your partner |
-| Encryption keys were deleted | Screenshots cannot be sent securely |
-| Vigil's autostart was removed | Vigil won't start after reboot |
-| Vigil's background service was disabled | Vigil may not restart if stopped |
-| The settings lock was bypassed | Someone changed settings without the unlock code |
-| The Vigil program file was deleted | Someone may be uninstalling Vigil |
-| The Vigil program file was replaced or modified | The program may have been tampered with |
-| No screenshot was taken when expected | The screenshot system may have stopped working |
-| A screenshot was modified after it was taken | Someone may have edited a screenshot before it was sent |
+| Vigil's autostart was removed | Someone deleted the autostart entry |
+| Vigil's autostart was modified | The autostart file was changed |
+| Vigil's background service was disabled | systemd service was stopped/disabled |
+| The settings lock was bypassed | Someone unlocked settings (fires on lock→unlock transition) |
+| The unlock code was cleared | Someone removed the unlock code via dconf |
+| All connection settings were deleted | Matrix transport was wiped (only after initial setup) |
+| Connection settings are partially cleared | Some Matrix keys were selectively removed |
+| Screenshot timing was tampered with | Interval set outside valid range (< 30s, > 120s, or gap < 30s) via dconf |
+| A screenshot was modified after it was taken | Someone edited a screenshot before upload |
 | A screenshot was unexpectedly deleted | A screenshot was removed before it could be sent |
-| Encryption failed to start | Screenshots are saved locally until encryption recovers |
-| Permission to run in the background was revoked | Vigil may stop when the window is closed |
-| The screenshot service was replaced | Screenshots may not be genuine |
-| A security protection was disabled | Someone may be trying to inspect Vigil's memory |
+| A pending upload marker was deleted | Upload tracking was tampered with |
+| The capture counter was tampered with | Lifetime screenshot count was modified |
+| Encryption state files were tampered with | Crypto files were modified on disk |
+| The Vigil program file was deleted | Someone may be uninstalling Vigil |
+| The Vigil program file was replaced or modified | The binary was changed |
+| A security protection was re-disabled | `PR_SET_DUMPABLE` was turned back on after Vigil disabled it |
+| A debugger was attached | `ptrace` detected -- someone is inspecting Vigil's memory |
+| LD_PRELOAD injection detected | A library was injected via environment variable |
+| /etc/ld.so.preload injection detected | A library was injected via system preload file |
+| The screenshot service was replaced | Display server executable changed |
 
-The next heartbeat will also include any warnings that occurred since the last update, so nothing is missed even if an individual warning fails to send.
+**Tamper if locked, warning if unlocked** (settings changes):
+
+| What your partner sees | What it means |
+|---|---|
+| Screenshot monitoring was turned off | Monitoring was disabled |
+| Screenshot timing was changed | Interval settings were modified (within valid range) |
+| Your partner ID was changed or removed | Partner Matrix ID was cleared |
+| Encryption keys were deleted | E2EE pickle key was cleared |
+| Service timer was changed | Heartbeat, upload, or tamper-check interval was set very high |
+
+**Always a warning** (system issues):
+
+| What your partner sees | What it means |
+|---|---|
+| No screenshot was taken when expected | Capture may have stalled |
+| Disk space is critically low | Less than 50 MB free |
+| Encryption failed to start | E2EE initialization error |
+| Permission to run in the background was revoked | XDG Background portal permission lost |
+| The screenshot service is no longer running | Display server process exited |
+| Device was unmonitored for a period | Gap detected (sleep, shutdown, or outage) |
+| A security hardening call failed | `prctl` call failed (non-critical) |
+
+The next heartbeat will also include any alerts that occurred since the last update, so nothing is missed even if an individual alert fails to send.
 
 ### Forced kill or uninstall
 
@@ -188,8 +221,9 @@ If Vigil is killed with `kill -9`, the power is pulled, or it's uninstalled enti
 1. **"STATUS: All clear"** = everything is fine
 2. **"NOTICE: Going offline"** = computer was turned off normally, expect silence
 3. **"NOTICE: Back online after…"** = computer was off or asleep, check if a "Going offline" message was sent before
-4. **"WARNING:"** = something suspicious, investigate
-5. **Deadline passes with no message at all** = most serious; Vigil was forcibly stopped
+4. **"TAMPER ATTEMPT"** (bold red) = someone is actively trying to circumvent Vigil, investigate immediately
+5. **"Warning"** (orange) = a system issue or legitimate unlocked settings change
+6. **Deadline passes with no message at all** = most serious; Vigil was forcibly stopped
 
 ## Security and encryption
 
