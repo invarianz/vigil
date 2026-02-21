@@ -17,7 +17,6 @@ public class Vigil.Services.ScreenshotService : Object {
     public signal void screenshot_failed (string error_message);
 
     private IScreenshotBackend? _active_backend = null;
-    private IScreenshotBackend? _fallback_backend = null;
 
     public string? active_backend_name {
         get {
@@ -84,17 +83,6 @@ public class Vigil.Services.ScreenshotService : Object {
                 return true;
             }
         } catch (Error e) {
-            debug ("Primary backend (%s) failed: %s",
-                _active_backend.backend_name, e.message);
-
-            // Try fallback backend
-            if (_fallback_backend != null) {
-                debug ("Falling back to %s", _fallback_backend.backend_name);
-                _active_backend = _fallback_backend;
-                _fallback_backend = null;
-                return yield take_screenshot (destination_path);
-            }
-
             var msg = "Screenshot failed (%s): %s".printf (
                 _active_backend.backend_name, e.message
             );

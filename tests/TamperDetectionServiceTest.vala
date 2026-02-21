@@ -123,13 +123,14 @@ void test_config_hash_changes_on_setting_change () {
     settings.set_int ("min-interval-seconds", 30);
 }
 
-void test_settings_sanity_monitoring_disabled () {
+void test_settings_sanity_monitoring_disabled_unlocked () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     // Set Matrix settings so matrix_cleared / partner_changed don't also fire
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
     settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+    settings.set_boolean ("settings-locked", false);
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -145,17 +146,78 @@ void test_settings_sanity_monitoring_disabled () {
     svc.check_settings_sanity ();
     assert_true (first_event == null);
 
-    // Now disable — fires because monitoring was previously active
+    // Now disable while unlocked — warning (~ prefix)
+    settings.set_boolean ("monitoring-enabled", false);
+    svc.check_settings_sanity ();
+    assert_true (first_event == "~monitoring_disabled");
+}
+
+void test_settings_sanity_monitoring_disabled_locked () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? first_event = null;
+    svc.tamper_detected.connect ((t, d) => {
+        if (first_event == null) {
+            first_event = t;
+        }
+    });
+
+    // Monitoring must be seen as active first, then disabled
+    settings.set_boolean ("monitoring-enabled", true);
+    svc.check_settings_sanity ();
+    first_event = null; // Reset after settings_unlocked may fire
+
+    // Now disable while locked — tamper (no prefix)
     settings.set_boolean ("monitoring-enabled", false);
     svc.check_settings_sanity ();
     assert_true (first_event == "monitoring_disabled");
+
+    // Cleanup
+    settings.set_boolean ("settings-locked", false);
+    settings.set_string ("unlock-code-hash", "");
 }
 
-void test_settings_sanity_interval_tampered () {
+void test_settings_sanity_interval_tampered_unlocked () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
     settings.set_int ("min-interval-seconds", 600);
+    settings.set_boolean ("settings-locked", false);
     // Set Matrix settings so matrix_cleared / partner_changed don't also fire
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? first_event = null;
+    svc.tamper_detected.connect ((t, d) => {
+        if (first_event == null) {
+            first_event = t;
+        }
+    });
+
+    svc.check_settings_sanity ();
+    assert_true (first_event == "~interval_tampered");
+
+    // Reset
+    settings.set_int ("min-interval-seconds", 30);
+}
+
+void test_settings_sanity_interval_tampered_locked () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 600);
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
@@ -175,6 +237,8 @@ void test_settings_sanity_interval_tampered () {
 
     // Reset
     settings.set_int ("min-interval-seconds", 30);
+    settings.set_boolean ("settings-locked", false);
+    settings.set_string ("unlock-code-hash", "");
 }
 
 void test_settings_sanity_matrix_cleared () {
@@ -244,19 +308,6 @@ void test_start_stop_lifecycle () {
 
     svc.stop ();
     assert_false (svc.is_running);
-}
-
-void test_binary_integrity_no_baseline () {
-    // With empty paths, binary integrity check should be a no-op
-    var svc = new Vigil.Services.TamperDetectionService (null);
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => {
-        event_type = t;
-    });
-
-    svc.check_binary_integrity ();
-    assert_true (event_type == null);
 }
 
 void test_settings_lock_bypass_detected () {
@@ -345,6 +396,8 @@ void test_heartbeat_interval_tampered () {
     settings.set_string ("matrix-room-id", "!room:test");
     settings.set_string ("partner-matrix-id", "@partner:matrix.org");
     settings.set_int ("heartbeat-interval-seconds", 7200);
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -363,6 +416,8 @@ void test_heartbeat_interval_tampered () {
 
     // Reset
     settings.set_int ("heartbeat-interval-seconds", 900);
+    settings.set_boolean ("settings-locked", false);
+    settings.set_string ("unlock-code-hash", "");
 }
 
 void test_upload_batch_interval_tampered () {
@@ -375,6 +430,8 @@ void test_upload_batch_interval_tampered () {
     settings.set_string ("matrix-room-id", "!room:test");
     settings.set_string ("partner-matrix-id", "@partner:matrix.org");
     settings.set_int ("upload-batch-interval-seconds", 5000);
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -393,6 +450,8 @@ void test_upload_batch_interval_tampered () {
 
     // Reset
     settings.set_int ("upload-batch-interval-seconds", 600);
+    settings.set_boolean ("settings-locked", false);
+    settings.set_string ("unlock-code-hash", "");
 }
 
 void test_tamper_check_interval_tampered () {
@@ -405,6 +464,8 @@ void test_tamper_check_interval_tampered () {
     settings.set_string ("matrix-room-id", "!room:test");
     settings.set_string ("partner-matrix-id", "@partner:matrix.org");
     settings.set_int ("tamper-check-interval-seconds", 3600);
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -423,9 +484,11 @@ void test_tamper_check_interval_tampered () {
 
     // Reset
     settings.set_int ("tamper-check-interval-seconds", 120);
+    settings.set_boolean ("settings-locked", false);
+    settings.set_string ("unlock-code-hash", "");
 }
 
-void test_partner_id_cleared () {
+void test_partner_id_cleared_locked () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
     settings.set_int ("min-interval-seconds", 30);
@@ -434,6 +497,8 @@ void test_partner_id_cleared () {
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
     settings.set_string ("partner-matrix-id", "");
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -447,6 +512,38 @@ void test_partner_id_cleared () {
     bool found = false;
     for (int i = 0; i < events.length; i++) {
         if (events[i] == "partner_changed") found = true;
+    }
+    assert_true (found);
+
+    // Reset
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+    settings.set_boolean ("settings-locked", false);
+    settings.set_string ("unlock-code-hash", "");
+}
+
+void test_partner_id_cleared_unlocked () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "");
+    settings.set_boolean ("settings-locked", false);
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    GenericArray<string> events = new GenericArray<string> ();
+    svc.tamper_detected.connect ((t, d) => {
+        events.add (t);
+    });
+
+    svc.check_settings_sanity ();
+
+    bool found = false;
+    for (int i = 0; i < events.length; i++) {
+        if (events[i] == "~partner_changed") found = true;
     }
     assert_true (found);
 
@@ -487,7 +584,7 @@ void test_e2ee_init_failure_event () {
     });
 
     svc.emit_e2ee_init_failure ();
-    assert_true (event_type == "e2ee_init_failed");
+    assert_true (event_type == "~e2ee_init_failed");
 }
 
 void test_capture_liveness_no_alarm_before_monitoring () {
@@ -608,7 +705,7 @@ void test_background_portal_flag_cleared_detected () {
 
     bool found = false;
     for (int i = 0; i < events.length; i++) {
-        if (events[i] == "background_permission_revoked") found = true;
+        if (events[i] == "~background_permission_revoked") found = true;
     }
     assert_true (found);
 
@@ -655,7 +752,7 @@ void test_emit_background_permission_revoked () {
     });
 
     svc.emit_background_permission_revoked ();
-    assert_true (event_type == "background_permission_revoked");
+    assert_true (event_type == "~background_permission_revoked");
     assert_true (event_details.contains ("auto-start"));
 }
 
@@ -670,62 +767,6 @@ void test_stop_cleans_up_urandom () {
     // Ensure double-stop is safe
     svc.stop ();
     assert_false (svc.is_running);
-}
-
-void test_binary_integrity_valid_binary () {
-    var dir = TestUtils.make_test_dir ();
-    DirUtils.create_with_parents (dir, 0755);
-
-    var binary_path = Path.build_filename (dir, "fake_binary");
-    var content = "this is a fake binary for testing";
-    try { FileUtils.set_contents (binary_path, content); } catch (Error e) { assert_not_reached (); }
-
-    var hash = Vigil.Services.SecurityUtils.compute_sha256_hex (content.data);
-
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.daemon_binary_path = binary_path;
-    svc.expected_binary_hash = hash;
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => { event_type = t; });
-
-    svc.check_binary_integrity ();
-    assert_true (event_type == null);
-
-    TestUtils.delete_directory_recursive (dir);
-}
-
-void test_binary_integrity_modified () {
-    var dir = TestUtils.make_test_dir ();
-    DirUtils.create_with_parents (dir, 0755);
-
-    var binary_path = Path.build_filename (dir, "fake_binary");
-    try { FileUtils.set_contents (binary_path, "original content"); } catch (Error e) { assert_not_reached (); }
-
-    // Use a wrong hash to simulate modification
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.daemon_binary_path = binary_path;
-    svc.expected_binary_hash = "0000000000000000000000000000000000000000000000000000000000000000";
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => { event_type = t; });
-
-    svc.check_binary_integrity ();
-    assert_true (event_type == "binary_modified");
-
-    TestUtils.delete_directory_recursive (dir);
-}
-
-void test_binary_integrity_missing () {
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.daemon_binary_path = "/tmp/definitely_does_not_exist_binary";
-    svc.expected_binary_hash = "somehash";
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => { event_type = t; });
-
-    svc.check_binary_integrity ();
-    assert_true (event_type == "binary_missing");
 }
 
 void test_file_monitoring_expected_deletion () {
@@ -859,7 +900,7 @@ void test_display_service_detects_gone_pid () {
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
 
     svc.check_display_service ();
-    assert_true (event_type == "display_service_gone");
+    assert_true (event_type == "~display_service_gone");
     // PID should be cleared after detection
     assert_true (svc.display_service_pid == 0);
 }
@@ -898,6 +939,122 @@ void test_file_monitoring_stop_is_safe () {
     TestUtils.delete_directory_recursive (dir);
 }
 
+void test_ld_so_preload_no_alarm_when_missing () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    // Use a path that doesn't exist — should not fire
+    Vigil.Services.SecurityUtils.check_ld_so_preload (null, svc,
+        "/tmp/vigil-test-nonexistent-ld-so-preload");
+    assert_true (event_type == null);
+}
+
+void test_ld_so_preload_detects_injection () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+    var fake_preload = Path.build_filename (dir, "ld.so.preload");
+    try {
+        FileUtils.set_contents (fake_preload, "/usr/lib/evil.so\n");
+    } catch (Error e) { assert_not_reached (); }
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    Vigil.Services.SecurityUtils.check_ld_so_preload (null, svc, fake_preload);
+    assert_true (event_type == "ld_so_preload_detected");
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_ld_so_preload_deferred_events () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+    var fake_preload = Path.build_filename (dir, "ld.so.preload");
+    try {
+        FileUtils.set_contents (fake_preload, "/usr/lib/evil.so\n");
+    } catch (Error e) { assert_not_reached (); }
+
+    var events = new GenericArray<string> ();
+    Vigil.Services.SecurityUtils.check_ld_so_preload (events, null, fake_preload);
+    assert_true (events.length == 1);
+    assert_true (events[0].has_prefix ("ld_so_preload_detected:"));
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_tracer_pid_no_alarm_normally () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    // Normal test execution — TracerPid should be 0
+    svc.check_tracer_pid ();
+    assert_true (event_type == null);
+}
+
+void test_settings_exact_boundary_triggers_tamper () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+    settings.set_boolean ("settings-locked", true);
+    settings.set_string ("unlock-code-hash", "test-hash");
+
+    // Set values exactly at the boundary thresholds
+    settings.set_int ("min-interval-seconds", 300);
+    settings.set_int ("max-interval-seconds", 300);
+    settings.set_int ("heartbeat-interval-seconds", 3600);
+    settings.set_int ("upload-batch-interval-seconds", 3600);
+    settings.set_int ("tamper-check-interval-seconds", 1800);
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    GenericArray<string> events = new GenericArray<string> ();
+    svc.tamper_detected.connect ((t, d) => {
+        events.add (t);
+    });
+
+    svc.check_settings_sanity ();
+
+    // All five boundary values should trigger as tamper (locked)
+    int interval_count = 0;
+    int timer_count = 0;
+    for (int i = 0; i < events.length; i++) {
+        if (events[i] == "interval_tampered") interval_count++;
+        if (events[i] == "timer_tampered") timer_count++;
+    }
+    assert_true (interval_count == 2); // min + max
+    assert_true (timer_count == 3);    // heartbeat + upload + tamper
+
+    // Reset
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 120);
+    settings.set_int ("heartbeat-interval-seconds", 900);
+    settings.set_int ("upload-batch-interval-seconds", 600);
+    settings.set_int ("tamper-check-interval-seconds", 120);
+    settings.set_boolean ("settings-locked", false);
+    settings.set_string ("unlock-code-hash", "");
+}
+
+void test_warning_report_method () {
+    var svc = new Vigil.Services.TamperDetectionService (null);
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => {
+        event_type = t;
+    });
+
+    svc.report_warning ("test_event", "some details");
+    assert_true (event_type == "~test_event");
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -907,19 +1064,25 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/config_hash_no_settings", test_config_hash_without_settings);
     Test.add_func ("/tamper/config_hash_with_settings", test_config_hash_with_settings);
     Test.add_func ("/tamper/config_hash_changes", test_config_hash_changes_on_setting_change);
-    Test.add_func ("/tamper/settings_monitoring_disabled", test_settings_sanity_monitoring_disabled);
-    Test.add_func ("/tamper/settings_interval_tampered", test_settings_sanity_interval_tampered);
+    Test.add_func ("/tamper/settings_monitoring_disabled_unlocked",
+        test_settings_sanity_monitoring_disabled_unlocked);
+    Test.add_func ("/tamper/settings_monitoring_disabled_locked",
+        test_settings_sanity_monitoring_disabled_locked);
+    Test.add_func ("/tamper/settings_interval_tampered_unlocked",
+        test_settings_sanity_interval_tampered_unlocked);
+    Test.add_func ("/tamper/settings_interval_tampered_locked",
+        test_settings_sanity_interval_tampered_locked);
     Test.add_func ("/tamper/settings_matrix_cleared", test_settings_sanity_matrix_cleared);
     Test.add_func ("/tamper/settings_matrix_incomplete", test_settings_sanity_matrix_incomplete);
     Test.add_func ("/tamper/start_stop_lifecycle", test_start_stop_lifecycle);
-    Test.add_func ("/tamper/binary_no_baseline", test_binary_integrity_no_baseline);
     Test.add_func ("/tamper/lock_bypass_detected", test_settings_lock_bypass_detected);
     Test.add_func ("/tamper/lock_hash_cleared", test_settings_lock_hash_cleared_detected);
     Test.add_func ("/tamper/lock_properly_locked", test_settings_lock_no_tamper_when_properly_locked);
     Test.add_func ("/tamper/heartbeat_interval_tampered", test_heartbeat_interval_tampered);
     Test.add_func ("/tamper/upload_batch_interval_tampered", test_upload_batch_interval_tampered);
     Test.add_func ("/tamper/tamper_check_interval_tampered", test_tamper_check_interval_tampered);
-    Test.add_func ("/tamper/partner_id_cleared", test_partner_id_cleared);
+    Test.add_func ("/tamper/partner_id_cleared_locked", test_partner_id_cleared_locked);
+    Test.add_func ("/tamper/partner_id_cleared_unlocked", test_partner_id_cleared_unlocked);
     Test.add_func ("/tamper/timers_within_limits", test_timers_within_limits_no_tamper);
     Test.add_func ("/tamper/e2ee_init_failure", test_e2ee_init_failure_event);
     Test.add_func ("/tamper/capture_liveness_no_alarm_before_monitoring",
@@ -938,9 +1101,6 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/background_permission_revoked_event",
         test_emit_background_permission_revoked);
     Test.add_func ("/tamper/stop_cleans_up_urandom", test_stop_cleans_up_urandom);
-    Test.add_func ("/tamper/binary_integrity_valid", test_binary_integrity_valid_binary);
-    Test.add_func ("/tamper/binary_integrity_modified", test_binary_integrity_modified);
-    Test.add_func ("/tamper/binary_integrity_missing", test_binary_integrity_missing);
     Test.add_func ("/tamper/file_monitoring_expected_deletion",
         test_file_monitoring_expected_deletion);
     Test.add_func ("/tamper/file_monitoring_unexpected_deletion",
@@ -957,6 +1117,18 @@ public static int main (string[] args) {
         test_display_service_detects_gone_pid);
     Test.add_func ("/tamper/display_service_valid_pid",
         test_display_service_valid_pid);
+    Test.add_func ("/tamper/ld_so_preload_no_alarm_when_missing",
+        test_ld_so_preload_no_alarm_when_missing);
+    Test.add_func ("/tamper/ld_so_preload_detects_injection",
+        test_ld_so_preload_detects_injection);
+    Test.add_func ("/tamper/ld_so_preload_deferred_events",
+        test_ld_so_preload_deferred_events);
+    Test.add_func ("/tamper/tracer_pid_no_alarm_normally",
+        test_tracer_pid_no_alarm_normally);
+    Test.add_func ("/tamper/settings_exact_boundary_triggers",
+        test_settings_exact_boundary_triggers_tamper);
+    Test.add_func ("/tamper/warning_report_method",
+        test_warning_report_method);
 
     return Test.run ();
 }

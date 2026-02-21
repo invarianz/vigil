@@ -32,11 +32,42 @@ void test_build_heartbeat_message_with_tamper_events () {
 
     var msg = svc.build_heartbeat_message ();
 
-    assert_true (msg.contains ("WARNING: Suspicious activity detected!"));
-    assert_true (msg.contains ("problems were found"));
+    assert_true (msg.contains ("TAMPER ATTEMPT DETECTED!"));
+    assert_true (msg.contains ("Tamper attempt"));
     // Human-friendly descriptions
-    assert_true (msg.contains ("autostart was removed"));
+    assert_true (msg.contains ("autostart entry was deleted"));
     assert_true (msg.contains ("background service was disabled"));
+}
+
+void test_build_heartbeat_message_with_warnings () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    svc.report_tamper_event ("~capture_stalled: No screenshot in 300s");
+    svc.report_tamper_event ("~e2ee_init_failed: encryption failed");
+
+    var msg = svc.build_heartbeat_message ();
+
+    assert_true (msg.contains ("WARNING: Issues detected"));
+    assert_true (msg.contains ("issues were found"));
+    // Human-friendly descriptions
+    assert_true (msg.contains ("screenshot system has stopped working"));
+    assert_true (msg.contains ("Encryption failed to start"));
+}
+
+void test_build_heartbeat_message_mixed_events () {
+    var svc = new Vigil.Services.HeartbeatService ();
+
+    // Mix of tamper and warning events
+    svc.report_tamper_event ("autostart_missing: file deleted");
+    svc.report_tamper_event ("~capture_stalled: No screenshot in 300s");
+
+    var msg = svc.build_heartbeat_message ();
+
+    // Should use tamper header (takes priority)
+    assert_true (msg.contains ("TAMPER ATTEMPT DETECTED!"));
+    // Both sections present
+    assert_true (msg.contains ("autostart entry was deleted"));
+    assert_true (msg.contains ("screenshot system has stopped working"));
 }
 
 void test_start_stop_lifecycle () {
@@ -348,11 +379,11 @@ void test_verification_section_below_separator () {
 void test_describe_tamper_event_known () {
     var result = Vigil.Services.HeartbeatService.describe_tamper_event (
         "autostart_missing: Autostart desktop entry is missing");
-    assert_true (result.contains ("autostart was removed"));
+    assert_true (result.contains ("autostart entry was deleted"));
 
     result = Vigil.Services.HeartbeatService.describe_tamper_event (
-        "binary_modified: hash mismatch");
-    assert_true (result.contains ("replaced or modified"));
+        "ld_so_preload_detected: /etc/ld.so.preload contains evil.so");
+    assert_true (result.contains ("code injection"));
 }
 
 void test_describe_tamper_event_unknown () {
@@ -387,7 +418,7 @@ void test_format_duration () {
         "1 hour 1 minute");
 }
 
-void test_gap_with_tamper_shows_warning_header () {
+void test_gap_with_tamper_shows_tamper_header () {
     var svc = new Vigil.Services.HeartbeatService ();
     svc.interval_seconds = 1;
 
@@ -400,10 +431,56 @@ void test_gap_with_tamper_shows_warning_header () {
     Thread.usleep (3000000);
 
     var msg = svc.build_heartbeat_message ();
-    // Should show WARNING (not NOTICE) because of the real tamper event
-    assert_true (msg.contains ("WARNING: Suspicious activity detected!"));
+    // Should show TAMPER (not NOTICE) because of the real tamper event
+    assert_true (msg.contains ("TAMPER ATTEMPT DETECTED!"));
     // Gap info should still be present
     assert_true (msg.contains ("Also, Vigil was not monitoring"));
+}
+
+void test_is_warning_event () {
+    assert_true (Vigil.Services.HeartbeatService.is_warning_event (
+        "~monitoring_disabled: Monitoring has been disabled"));
+    assert_true (Vigil.Services.HeartbeatService.is_warning_event (
+        "~capture_stalled: No screenshot"));
+    assert_false (Vigil.Services.HeartbeatService.is_warning_event (
+        "autostart_missing: file deleted"));
+    assert_false (Vigil.Services.HeartbeatService.is_warning_event (
+        "settings_unlocked: bypassed"));
+}
+
+void test_describe_strips_warning_prefix () {
+    // Warning-prefixed events should still resolve to the correct description
+    var result = Vigil.Services.HeartbeatService.describe_tamper_event (
+        "~monitoring_disabled: Monitoring has been disabled via settings");
+    assert_true (result.contains ("Screenshot monitoring was turned off"));
+
+    result = Vigil.Services.HeartbeatService.describe_tamper_event (
+        "~capture_stalled: No screenshot captured in 300 seconds");
+    assert_true (result.contains ("screenshot system has stopped working"));
+}
+
+void test_heartbeat_html_output () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.report_tamper_event ("autostart_missing: file deleted");
+
+    string? html;
+    svc.build_heartbeat_message (out html);
+
+    assert_true (html != null);
+    assert_true (html.contains ("#dc3545")); // red for tamper
+    assert_true (html.contains ("TAMPER ATTEMPT DETECTED!"));
+}
+
+void test_heartbeat_html_warning_color () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.report_tamper_event ("~capture_stalled: No screenshot in 300s");
+
+    string? html;
+    svc.build_heartbeat_message (out html);
+
+    assert_true (html != null);
+    assert_true (html.contains ("#fd7e14")); // orange for warning
+    assert_true (html.contains ("WARNING: Issues detected"));
 }
 
 void test_network_recovery_message () {
@@ -428,6 +505,10 @@ public static int main (string[] args) {
         test_build_heartbeat_message_basic);
     Test.add_func ("/heartbeat/build_message_tamper_events",
         test_build_heartbeat_message_with_tamper_events);
+    Test.add_func ("/heartbeat/build_message_warnings",
+        test_build_heartbeat_message_with_warnings);
+    Test.add_func ("/heartbeat/build_message_mixed",
+        test_build_heartbeat_message_mixed_events);
     Test.add_func ("/heartbeat/start_stop_lifecycle",
         test_start_stop_lifecycle);
     Test.add_func ("/heartbeat/double_start_idempotent",
@@ -484,10 +565,18 @@ public static int main (string[] args) {
         test_describe_tamper_event_no_colon);
     Test.add_func ("/heartbeat/format_duration",
         test_format_duration);
-    Test.add_func ("/heartbeat/gap_with_tamper_shows_warning",
-        test_gap_with_tamper_shows_warning_header);
+    Test.add_func ("/heartbeat/gap_with_tamper_shows_tamper",
+        test_gap_with_tamper_shows_tamper_header);
     Test.add_func ("/heartbeat/network_recovery",
         test_network_recovery_message);
+    Test.add_func ("/heartbeat/is_warning_event",
+        test_is_warning_event);
+    Test.add_func ("/heartbeat/describe_strips_warning_prefix",
+        test_describe_strips_warning_prefix);
+    Test.add_func ("/heartbeat/html_output",
+        test_heartbeat_html_output);
+    Test.add_func ("/heartbeat/html_warning_color",
+        test_heartbeat_html_warning_color);
 
     return Test.run ();
 }

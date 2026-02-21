@@ -29,12 +29,6 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Path to the autostart desktop file. */
     public string autostart_desktop_path { get; set; }
 
-    /** Path to the daemon binary. */
-    public string daemon_binary_path { get; set; default = ""; }
-
-    /** Expected SHA256 hash of the daemon binary (set at install time). */
-    public string expected_binary_hash { get; set; default = ""; }
-
     /** Path to the screenshots directory (for orphan detection). */
     public string screenshots_dir { get; set; default = ""; }
 
@@ -138,8 +132,9 @@ public class Vigil.Services.TamperDetectionService : Object {
         check_autostart_entry ();
         check_systemd_service ();
         check_settings_sanity ();
-        check_binary_integrity ();
         check_dumpable ();
+        check_tracer_pid ();
+        SecurityUtils.check_ld_so_preload (null, this);
         check_display_service ();
         check_capture_liveness ();
         check_orphan_screenshots ();
@@ -174,7 +169,7 @@ public class Vigil.Services.TamperDetectionService : Object {
         var threshold = (int64) max_capture_interval_seconds * 2;
 
         if (elapsed_sec > threshold) {
-            emit_tamper ("capture_stalled",
+            emit_warning ("capture_stalled",
                 "No screenshot captured in %lld seconds (expected every %d seconds)".printf (
                     elapsed_sec, max_capture_interval_seconds));
         }
@@ -267,12 +262,6 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Check that the autostart desktop file exists and hasn't been tampered with.
      */
     public void check_autostart_entry () {
-        // Only check if autostart was previously configured (skip in dev)
-        if (_settings != null &&
-            !_settings.get_boolean ("autostart-enabled")) {
-            return;
-        }
-
         // Single syscall: attempt to read directly, handle missing via exception.
         // Avoids a redundant stat() before the open().
         try {
@@ -295,12 +284,6 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Check that the systemd user service is enabled and active.
      */
     public void check_systemd_service () {
-        // Only check if autostart was previously configured (skip in dev)
-        if (_settings != null &&
-            !_settings.get_boolean ("autostart-enabled")) {
-            return;
-        }
-
         try {
             var enabled_proc = new Subprocess.newv (
                 { "systemctl", "--user", "is-enabled", "vigil-daemon.service" },
@@ -328,15 +311,19 @@ public class Vigil.Services.TamperDetectionService : Object {
             return;
         }
 
+        bool locked = _settings.get_boolean ("settings-locked");
+
         // Track whether monitoring was ever active
         if (_settings.get_boolean ("monitoring-enabled")) {
             _monitoring_was_active = true;
         }
 
-        // Only alert if monitoring was previously active and then disabled
+        // Only alert if monitoring was previously active and then disabled.
+        // Severity depends on lock state: changing settings while unlocked
+        // is legitimate (warning), while locked is a tamper attempt.
         if (_monitoring_was_active &&
             !_settings.get_boolean ("monitoring-enabled")) {
-            emit_tamper ("monitoring_disabled",
+            emit_lock_dependent (locked, "monitoring_disabled",
                 "Monitoring has been disabled via settings");
         }
 
@@ -346,14 +333,14 @@ public class Vigil.Services.TamperDetectionService : Object {
         int min_interval = _settings.get_int ("min-interval-seconds");
         int max_interval = _settings.get_int ("max-interval-seconds");
 
-        if (min_interval > 300) {
-            emit_tamper ("interval_tampered",
-                "Minimum interval set to %d seconds (> 5 minutes)".printf (min_interval));
+        if (min_interval >= 300) {
+            emit_lock_dependent (locked, "interval_tampered",
+                "Minimum interval set to %d seconds (>= 5 minutes)".printf (min_interval));
         }
 
-        if (max_interval > 300) {
-            emit_tamper ("interval_tampered",
-                "Maximum interval set to %d seconds (> 5 minutes)".printf (max_interval));
+        if (max_interval >= 300) {
+            emit_lock_dependent (locked, "interval_tampered",
+                "Maximum interval set to %d seconds (>= 5 minutes)".printf (max_interval));
         }
 
         // Check if Matrix transport was cleared (only after setup is complete,
@@ -377,27 +364,27 @@ public class Vigil.Services.TamperDetectionService : Object {
         // Heartbeat > 1 hour, upload batch > 1 hour, tamper check > 30 min
         // are all far beyond the defaults and indicate intentional tampering.
         int heartbeat_interval = _settings.get_int ("heartbeat-interval-seconds");
-        if (heartbeat_interval > 3600) {
-            emit_tamper ("timer_tampered",
-                "Heartbeat interval set to %d seconds (> 1 hour)".printf (heartbeat_interval));
+        if (heartbeat_interval >= 3600) {
+            emit_lock_dependent (locked, "timer_tampered",
+                "Heartbeat interval set to %d seconds (>= 1 hour)".printf (heartbeat_interval));
         }
 
         int upload_batch_interval = _settings.get_int ("upload-batch-interval-seconds");
-        if (upload_batch_interval > 3600) {
-            emit_tamper ("timer_tampered",
-                "Upload batch interval set to %d seconds (> 1 hour)".printf (upload_batch_interval));
+        if (upload_batch_interval >= 3600) {
+            emit_lock_dependent (locked, "timer_tampered",
+                "Upload batch interval set to %d seconds (>= 1 hour)".printf (upload_batch_interval));
         }
 
         int tamper_check_interval = _settings.get_int ("tamper-check-interval-seconds");
-        if (tamper_check_interval > 1800) {
-            emit_tamper ("timer_tampered",
-                "Tamper check interval set to %d seconds (> 30 min)".printf (tamper_check_interval));
+        if (tamper_check_interval >= 1800) {
+            emit_lock_dependent (locked, "timer_tampered",
+                "Tamper check interval set to %d seconds (>= 30 min)".printf (tamper_check_interval));
         }
 
         // Check if partner Matrix ID was changed or cleared
         string partner_id = _settings.get_string ("partner-matrix-id");
         if (hs_url != "" && token != "" && room_id != "" && partner_id == "") {
-            emit_tamper ("partner_changed",
+            emit_lock_dependent (locked, "partner_changed",
                 "Partner Matrix ID was cleared while transport is configured");
         }
 
@@ -406,7 +393,7 @@ public class Vigil.Services.TamperDetectionService : Object {
         string pickle_key = _settings.get_string ("e2ee-pickle-key");
 
         if (device_id != "" && pickle_key == "") {
-            emit_tamper ("e2ee_disabled",
+            emit_lock_dependent (locked, "e2ee_disabled",
                 "E2EE pickle key was cleared (encryption will not work)");
         }
 
@@ -454,37 +441,6 @@ public class Vigil.Services.TamperDetectionService : Object {
         if (locked && hash == "") {
             emit_tamper ("unlock_code_cleared",
                 "Unlock code hash was cleared while settings are locked");
-        }
-    }
-
-    /**
-     * Verify the daemon binary hasn't been replaced.
-     */
-    public void check_binary_integrity () {
-        if (daemon_binary_path == "" || expected_binary_hash == "") {
-            return; // No baseline to compare against
-        }
-
-        if (!FileUtils.test (daemon_binary_path, FileTest.EXISTS)) {
-            emit_tamper ("binary_missing",
-                "Daemon binary not found at %s".printf (daemon_binary_path));
-            return;
-        }
-
-        try {
-            uint8[] contents;
-            FileUtils.get_data (daemon_binary_path, out contents);
-            var actual_hash = SecurityUtils.compute_sha256_hex (contents);
-
-            if (actual_hash != expected_binary_hash) {
-                emit_tamper ("binary_modified",
-                    "Daemon binary hash mismatch (expected %s, got %s)".printf (
-                        expected_binary_hash.substring (0, 16) + "\u2026",
-                        actual_hash.substring (0, 16) + "\u2026"));
-            }
-        } catch (Error e) {
-            emit_tamper ("binary_unreadable",
-                "Cannot read daemon binary: %s".printf (e.message));
         }
     }
 
@@ -607,6 +563,31 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     /**
+     * Check whether another process is tracing this process via ptrace.
+     *
+     * Root can ptrace despite PR_SET_DUMPABLE=0 via CAP_SYS_PTRACE.
+     * TracerPid in /proc/self/status is non-zero when actively traced.
+     */
+    public void check_tracer_pid () {
+        try {
+            string contents;
+            FileUtils.get_contents ("/proc/self/status", out contents);
+            foreach (var line in contents.split ("\n")) {
+                if (line.has_prefix ("TracerPid:")) {
+                    var pid_str = line.substring (10).strip ();
+                    if (pid_str != "0" && pid_str != "") {
+                        emit_tamper ("ptrace_detected",
+                            "Process is being traced by PID %s".printf (pid_str));
+                    }
+                    break;
+                }
+            }
+        } catch (Error e) {
+            // Not actionable
+        }
+    }
+
+    /**
      * Check that the display service (Portal/compositor) is still running
      * and hasn't been replaced by a different executable.
      *
@@ -620,7 +601,7 @@ public class Vigil.Services.TamperDetectionService : Object {
 
         var proc_dir = "/proc/%u".printf (display_service_pid);
         if (!FileUtils.test (proc_dir, FileTest.IS_DIR)) {
-            emit_tamper ("display_service_gone",
+            emit_warning ("display_service_gone",
                 "Display service %s (PID %u) is no longer running".printf (
                     display_service_name, display_service_pid));
             display_service_pid = 0;
@@ -648,7 +629,7 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Called by the daemon when E2EE was configured but failed to start.
      */
     public void emit_e2ee_init_failure () {
-        emit_tamper ("e2ee_init_failed",
+        emit_warning ("e2ee_init_failed",
             "E2EE initialization failed at startup -- " +
             "monitoring will not send screenshots until encryption is restored");
     }
@@ -658,7 +639,7 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Called by the daemon when the XDG Background portal denies autostart.
      */
     public void emit_background_permission_revoked () {
-        emit_tamper ("background_permission_revoked",
+        emit_warning ("background_permission_revoked",
             "Background portal autostart permission was revoked -- " +
             "daemon will not auto-start at next login");
     }
@@ -708,8 +689,7 @@ public class Vigil.Services.TamperDetectionService : Object {
                 if (basename == "account.pickle" ||
                     basename == "megolm_outbound.pickle" ||
                     basename == "pickle_key" ||
-                    basename == "access_token" ||
-                    basename == "binary_hash") {
+                    basename == "access_token") {
                     emit_tamper ("crypto_file_tampered",
                         "Crypto file %s was deleted".printf (basename));
                 }
@@ -743,6 +723,30 @@ public class Vigil.Services.TamperDetectionService : Object {
     private void emit_tamper (string event_type, string details) {
         debug ("Tamper detected [%s]: %s", event_type, details);
         tamper_detected (event_type, details);
+    }
+
+    private void emit_warning (string event_type, string details) {
+        debug ("Warning [%s]: %s", event_type, details);
+        tamper_detected ("~" + event_type, details);
+    }
+
+    /** Emit tamper when locked, warning when unlocked. */
+    private void emit_lock_dependent (bool locked, string event_type, string details) {
+        if (locked) {
+            emit_tamper (event_type, details);
+        } else {
+            emit_warning (event_type, details);
+        }
+    }
+
+    /**
+     * Report a warning event from an external source.
+     *
+     * Used by other services (e.g. DBusServer) to funnel warning events
+     * through the same signal pipeline with the ~ severity prefix.
+     */
+    public void report_warning (string event_type, string details) {
+        emit_warning (event_type, details);
     }
 
     private int get_jittered_interval () {

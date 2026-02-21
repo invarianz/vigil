@@ -56,6 +56,13 @@ public class Vigil.Services.StorageService : Object {
     private string _base_dir;
     private int _screenshot_file_count = -1;
 
+    /** Build the .pending marker path for a given screenshot path. */
+    private string marker_path_for (string screenshot_path) {
+        return Path.build_filename (
+            pending_dir, Path.get_basename (screenshot_path) + ".pending"
+        );
+    }
+
     /**
      * Create a StorageService.
      *
@@ -118,8 +125,7 @@ public class Vigil.Services.StorageService : Object {
                 "Screenshot path is outside the screenshots directory");
         }
 
-        var basename = Path.get_basename (screenshot_path);
-        var marker_path = Path.build_filename (pending_dir, basename + ".pending");
+        var marker_path = marker_path_for (screenshot_path);
         var marker = File.new_for_path (marker_path);
 
         // Compute SHA-256 hash of the screenshot for integrity verification
@@ -183,8 +189,7 @@ public class Vigil.Services.StorageService : Object {
      * @return true if the data matches the capture-time hash.
      */
     public bool verify_screenshot_integrity_from_data (string screenshot_path, uint8[] file_data) {
-        var basename = Path.get_basename (screenshot_path);
-        var marker_path = Path.build_filename (pending_dir, basename + ".pending");
+        var marker_path = marker_path_for (screenshot_path);
 
         try {
             string marker_contents;
@@ -222,8 +227,7 @@ public class Vigil.Services.StorageService : Object {
      * Mark a screenshot as successfully uploaded (remove pending marker).
      */
     public void mark_uploaded (string screenshot_path) {
-        var basename = Path.get_basename (screenshot_path);
-        var marker_path = Path.build_filename (pending_dir, basename + ".pending");
+        var marker_path = marker_path_for (screenshot_path);
 
         // Notify watchers before deletion so they can register expected deletions
         will_delete_file (marker_path);
@@ -383,10 +387,7 @@ public class Vigil.Services.StorageService : Object {
             int excess = (int) screenshot_files.length - max_local_screenshots;
             for (int i = 0; i < excess && i < screenshot_files.length; i++) {
                 var file_path = screenshot_files[i].path;
-                var marker_path = Path.build_filename (
-                    pending_dir,
-                    Path.get_basename (file_path) + ".pending"
-                );
+                var marker_path = marker_path_for (file_path);
 
                 // Only delete if already uploaded (no pending marker)
                 if (!FileUtils.test (marker_path, FileTest.EXISTS)) {

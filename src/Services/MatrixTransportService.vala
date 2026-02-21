@@ -1007,9 +1007,10 @@ public class Vigil.Services.MatrixTransportService : Object {
     /**
      * Send a tamper alert to the Matrix room with HTML formatting.
      *
-     * Tamper alerts use bold + blockquote so they stand out visually
-     * in Element and other Matrix clients, clearly distinguishable
-     * from regular heartbeat/status messages.
+     * Distinguishes tamper attempts (bold red) from warnings (orange)
+     * using the ~ prefix convention from TamperDetectionService.
+     * Tamper attempts include an "investigate" call-to-action;
+     * warnings are informational.
      */
     public async bool send_alert (string event_type, string details) {
         if (!is_configured) {
@@ -1018,12 +1019,37 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         var raw_event = "%s: %s".printf (event_type, details);
         var friendly = Vigil.Services.HeartbeatService.describe_tamper_event (raw_event);
+        bool is_warning = Vigil.Services.HeartbeatService.is_warning_event (raw_event);
 
-        var plain = "WARNING: %s\n\nIf you did not authorize this change, please investigate."
-            .printf (friendly);
-        var html = ("<strong>WARNING:</strong> %s<br><br>" +
-            "<em>If you did not authorize this change, please investigate.</em>")
-            .printf (Markup.escape_text (friendly));
+        string plain;
+        string html;
+
+        if (is_warning) {
+            plain = "\u26a0 Warning: %s".printf (friendly);
+            html = "<font color=\"#fd7e14\">\u26a0 Warning: %s</font>".printf (
+                Markup.escape_text (friendly));
+        } else {
+            plain = "\xf0\x9f\x9a\xa8 TAMPER ATTEMPT: %s\n\nIf you did not authorize this change, please investigate."
+                .printf (friendly);
+            html = ("<b><font color=\"#dc3545\">\xf0\x9f\x9a\xa8 TAMPER ATTEMPT: %s</font></b>" +
+                "<br><br><em>If you did not authorize this change, please investigate.</em>")
+                .printf (Markup.escape_text (friendly));
+        }
+
+        return yield send_html_message (plain, html);
+    }
+
+    /**
+     * Send an HTML-formatted message to the Matrix room.
+     *
+     * Uses Matrix's org.matrix.custom.html format so clients
+     * render rich text (bold, color, etc.) while falling back
+     * to the plain text body for plain-text clients.
+     */
+    public async bool send_html_message (string plain, string html) {
+        if (!is_configured) {
+            return false;
+        }
 
         var builder = new Json.Builder ();
         builder.begin_object ();

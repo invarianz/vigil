@@ -247,7 +247,44 @@ public class Vigil.Services.SecurityUtils : Object {
             events.add ("ld_preload_detected:LD_PRELOAD is set: %s".printf (ld_preload));
         }
 
+        // Detect /etc/ld.so.preload injection
+        check_ld_so_preload (events);
+
         return events;
+    }
+
+    /**
+     * Check for /etc/ld.so.preload library injection.
+     *
+     * The dynamic linker processes this file before program start,
+     * allowing root to inject arbitrary shared libraries without
+     * setting LD_PRELOAD. Supports deferred events (startup) and
+     * direct TamperDetectionService reporting (periodic checks).
+     *
+     * @param deferred_events  Startup event collector (before services exist)
+     * @param tamper_svc       Direct tamper reporting (periodic checks)
+     * @param path             Override path for testing (default: /etc/ld.so.preload)
+     */
+    public static void check_ld_so_preload (GenericArray<string>? deferred_events = null,
+                                             TamperDetectionService? tamper_svc = null,
+                                             string path = "/etc/ld.so.preload") {
+        try {
+            string contents;
+            FileUtils.get_contents (path, out contents);
+            var stripped = contents.strip ();
+            if (stripped != "") {
+                var msg = "/etc/ld.so.preload contains: %s".printf (stripped);
+                if (tamper_svc != null) {
+                    tamper_svc.report_tamper ("ld_so_preload_detected", msg);
+                } else if (deferred_events != null) {
+                    deferred_events.add ("ld_so_preload_detected:" + msg);
+                }
+            }
+        } catch (FileError.NOENT e) {
+            // File doesn't exist — normal
+        } catch (Error e) {
+            // Permission denied or other — not actionable
+        }
     }
 
     /**
@@ -256,7 +293,7 @@ public class Vigil.Services.SecurityUtils : Object {
      * Returns a compact multi-field string describing the runtime
      * environment so the partner can verify where the daemon is running.
      */
-    public static string collect_environment_attestation (string binary_path, string binary_hash) {
+    public static string collect_environment_attestation (string binary_path) {
         var sb = new StringBuilder ();
 
         // Hostname
@@ -266,13 +303,8 @@ public class Vigil.Services.SecurityUtils : Object {
         var session = Vigil.Utils.detect_session_type ();
         sb.append_printf (" | session: %s", session.to_string ());
 
-        // Binary path and hash (truncate to 16 chars for readability)
+        // Binary path (shows Flatpak vs system install vs dev build)
         sb.append_printf (" | binary: %s", binary_path);
-        if (binary_hash.length >= 16) {
-            sb.append_printf (" | binary_hash: %s\u2026", binary_hash.substring (0, 16));
-        } else {
-            sb.append_printf (" | binary_hash: %s", binary_hash);
-        }
 
         // Flatpak detection
         bool is_flatpak = FileUtils.test ("/.flatpak-info", FileTest.EXISTS);

@@ -113,11 +113,16 @@ public class Vigil.Daemon.DaemonApp : GLib.Application {
         _heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
         _tamper_svc = new Vigil.Services.TamperDetectionService (settings);
 
-        // Drain deferred tamper events collected before services existed
+        // Drain deferred tamper events collected before services existed.
+        // prctl_failed is a warning (system issue), everything else is tamper.
         for (int i = 0; i < _deferred_tamper_events.length; i++) {
             var parts = _deferred_tamper_events[i].split (":", 2);
             if (parts.length == 2) {
-                _tamper_svc.report_tamper (parts[0], parts[1]);
+                if (parts[0] == "prctl_failed") {
+                    _tamper_svc.report_warning (parts[0], parts[1]);
+                } else {
+                    _tamper_svc.report_tamper (parts[0], parts[1]);
+                }
             }
         }
 

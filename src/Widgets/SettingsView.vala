@@ -33,7 +33,6 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private Gtk.SpinButton min_interval_spin;
     private Gtk.SpinButton max_interval_spin;
     private Gtk.SpinButton retention_spin;
-    private Gtk.Switch autostart_switch;
 
     private Gtk.Box setup_box;
     private Gtk.Box advanced_box;
@@ -202,11 +201,6 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         retention_spin = new Gtk.SpinButton.with_range (10, 1000, 10);
         settings.bind ("max-local-screenshots", retention_spin, "value", SettingsBindFlags.DEFAULT);
 
-        autostart_switch = new Gtk.Switch () {
-            valign = Gtk.Align.CENTER
-        };
-        settings.bind ("autostart-enabled", autostart_switch, "active", SettingsBindFlags.DEFAULT);
-
         advanced_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 16) {
             margin_top = 16,
             margin_bottom = 16,
@@ -217,7 +211,6 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         advanced_box.append (create_form_row ("Minimum interval (seconds)", min_interval_spin));
         advanced_box.append (create_form_row ("Maximum interval (seconds)", max_interval_spin));
         advanced_box.append (create_form_row ("Maximum local screenshots", retention_spin));
-        advanced_box.append (create_form_row ("Start at login", autostart_switch));
 
         // Assemble the view
         append (lock_header);

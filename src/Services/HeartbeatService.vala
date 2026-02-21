@@ -226,9 +226,10 @@ public class Vigil.Services.HeartbeatService : Object {
      * Includes gap detection (sleep/wake), recovery info (consecutive
      * failures), tamper events, and optional config hash signature.
      */
-    public string build_heartbeat_message () {
+    public string build_heartbeat_message (out string? html_body = null) {
         var uptime = get_uptime_seconds ();
         var sb = new StringBuilder ();
+        var html = new StringBuilder ();
 
         // ── Gap detection ──
         bool has_gap = false;
@@ -241,90 +242,171 @@ public class Vigil.Services.HeartbeatService : Object {
                 has_gap = true;
                 gap_seconds = elapsed_sec;
                 report_tamper_event (
-                    "unmonitored_gap: Device was unmonitored for %s"
+                    "~unmonitored_gap: Device was unmonitored for %s"
                     .printf (format_duration (elapsed_sec)));
                 gap_detected (elapsed_sec);
             }
         }
 
-        // ── Separate display events (filter out gap — shown in status section) ──
-        var display_events = new GenericArray<string> ();
+        // ── Separate display events into tamper attempts and warnings ──
+        var tamper_events = new GenericArray<string> ();
+        var warning_events = new GenericArray<string> ();
         for (int i = 0; i < _tamper_events.length; i++) {
-            if (!_tamper_events[i].has_prefix ("unmonitored_gap:")) {
-                display_events.add (_tamper_events[i]);
+            var evt = _tamper_events[i];
+            // Filter out gap events — shown in status section
+            if (evt.has_prefix ("unmonitored_gap:") ||
+                evt.has_prefix ("~unmonitored_gap:")) {
+                continue;
+            }
+            if (is_warning_event (evt)) {
+                warning_events.add (evt);
+            } else {
+                tamper_events.add (evt);
             }
         }
-        bool has_warnings = display_events.length > 0;
+        bool has_tampers = tamper_events.length > 0;
+        bool has_warnings = warning_events.length > 0;
+        bool has_events = has_tampers || has_warnings;
 
         // ═══════════════════════════════════════════════════════════
         //  Section 1: Plain-language summary (partner-facing)
         // ═══════════════════════════════════════════════════════════
 
         // ── Status header ──
-        if (has_warnings) {
-            sb.append ("WARNING: Suspicious activity detected!");
+        if (has_tampers) {
+            sb.append ("TAMPER ATTEMPT DETECTED!");
+            html.append ("<b><font color=\"#dc3545\">TAMPER ATTEMPT DETECTED!</font></b>");
+        } else if (has_warnings) {
+            sb.append ("WARNING: Issues detected");
+            html.append ("<font color=\"#fd7e14\">WARNING: Issues detected</font>");
         } else if (has_gap) {
-            sb.append_printf ("NOTICE: Back online after %s",
+            var gap_text = "NOTICE: Back online after %s".printf (
                 format_duration (gap_seconds));
+            sb.append (gap_text);
+            html.append (Markup.escape_text (gap_text));
         } else if (consecutive_failures > 0) {
             sb.append ("NOTICE: Connection restored");
+            html.append ("NOTICE: Connection restored");
         } else {
             sb.append ("STATUS: All clear");
+            html.append ("STATUS: All clear");
         }
 
-        // ── Warning details (human-friendly tamper event descriptions) ──
-        if (has_warnings) {
+        // ── Tamper event details (bold red) ──
+        if (has_tampers) {
             sb.append ("\n\n");
-            int count = int.min ((int) display_events.length, 50);
-            int start_idx = (int) display_events.length - count;
+            html.append ("<br><br>");
+            int count = int.min ((int) tamper_events.length, 50);
+            int start_idx = (int) tamper_events.length - count;
             if (start_idx > 0) {
-                sb.append_printf (
-                    "The following problems were found (%d total, showing last 50):\n",
-                    (int) display_events.length);
+                var intro = "Tamper attempts detected (%d total, showing last 50):\n".printf (
+                    (int) tamper_events.length);
+                sb.append (intro);
+                html.append (Markup.escape_text (intro.strip ()));
+                html.append ("<br>");
             } else {
-                sb.append (display_events.length == 1
-                    ? "The following problem was found:\n"
-                    : "The following problems were found:\n");
+                var intro = tamper_events.length == 1
+                    ? "Tamper attempt detected:\n"
+                    : "Tamper attempts detected:\n";
+                sb.append (intro);
+                html.append (Markup.escape_text (intro.strip ()));
+                html.append ("<br>");
             }
-            for (int i = start_idx; i < display_events.length; i++) {
-                if (sb.len > 55000) {
+            for (int i = start_idx; i < tamper_events.length; i++) {
+                if (sb.len > 50000) {
                     sb.append ("  \u2026 (truncated)\n");
+                    html.append ("\u2026 (truncated)<br>");
                     break;
                 }
-                sb.append_printf ("  * %s\n", describe_tamper_event (display_events[i]));
+                var desc = describe_tamper_event (tamper_events[i]);
+                sb.append_printf ("  * %s\n", desc);
+                html.append_printf ("<b><font color=\"#dc3545\">  \u2022 %s</font></b><br>",
+                    Markup.escape_text (desc));
+            }
+        }
+
+        // ── Warning event details (orange) ──
+        if (has_warnings) {
+            sb.append ("\n");
+            html.append ("<br>");
+            int count = int.min ((int) warning_events.length, 50);
+            int start_idx = (int) warning_events.length - count;
+            if (has_tampers) {
+                var intro = "Also, the following issues were found:\n";
+                sb.append (intro);
+                html.append (Markup.escape_text (intro.strip ()));
+                html.append ("<br>");
+            } else if (start_idx > 0) {
+                var intro = "The following issues were found (%d total, showing last 50):\n".printf (
+                    (int) warning_events.length);
+                sb.append (intro);
+                html.append (Markup.escape_text (intro.strip ()));
+                html.append ("<br>");
+            } else {
+                var intro = warning_events.length == 1
+                    ? "The following issue was found:\n"
+                    : "The following issues were found:\n";
+                sb.append (intro);
+                html.append (Markup.escape_text (intro.strip ()));
+                html.append ("<br>");
+            }
+            for (int i = start_idx; i < warning_events.length; i++) {
+                if (sb.len > 55000) {
+                    sb.append ("  \u2026 (truncated)\n");
+                    html.append ("\u2026 (truncated)<br>");
+                    break;
+                }
+                var desc = describe_tamper_event (warning_events[i]);
+                sb.append_printf ("  * %s\n", desc);
+                html.append_printf ("<font color=\"#fd7e14\">  \u2022 %s</font><br>",
+                    Markup.escape_text (desc));
             }
         }
 
         // ── Gap context ──
         if (has_gap) {
-            sb.append_printf ("\n%s was not monitoring for %s.\n",
-                has_warnings ? "Also, Vigil" : "Vigil",
+            var gap_line = "\n%s was not monitoring for %s.\n".printf (
+                has_events ? "Also, Vigil" : "Vigil",
                 format_duration (gap_seconds));
-            sb.append ("If you received a \"Going offline\" message before this gap, ");
-            sb.append ("it was probably a normal shutdown or sleep.\n");
-            sb.append ("If you did NOT receive a \"Going offline\" message, ");
-            sb.append ("this could be suspicious.");
+            sb.append (gap_line);
+            html.append ("<br>");
+            html.append (Markup.escape_text (gap_line.strip ()));
+            html.append ("<br>");
+
+            var offline_line = "If you received a \"Going offline\" message before this gap, " +
+                "it was probably a normal shutdown or sleep.\n" +
+                "If you did NOT receive a \"Going offline\" message, " +
+                "this could be suspicious.";
+            sb.append (offline_line);
+            html.append (Markup.escape_text (offline_line));
         }
 
         // ── Network recovery ──
         if (consecutive_failures > 0 && !has_gap) {
-            sb.append_printf ("\n\nVigil was running but could not reach the server. " +
-                "%d %s missed.\n",
-                consecutive_failures,
-                consecutive_failures == 1 ? "update was" : "updates were");
-            sb.append ("Screenshots taken during the outage are now being sent.");
+            var recovery = "\n\nVigil was running but could not reach the server. " +
+                "%d %s missed.\n".printf (
+                    consecutive_failures,
+                    consecutive_failures == 1 ? "update was" : "updates were") +
+                "Screenshots taken during the outage are now being sent.";
+            sb.append (recovery);
+            html.append ("<br><br>");
+            html.append (Markup.escape_text (recovery.strip ()));
         }
 
         // ── Stats ──
-        sb.append_printf ("\n\nRunning for %s.\n", format_duration (uptime));
-        sb.append_printf ("Screenshots taken: %d\n", screenshots_since_last);
-        sb.append_printf ("Waiting to send: %d", pending_upload_count);
+        var stats = "\n\nRunning for %s.\nScreenshots taken: %d\nWaiting to send: %d".printf (
+            format_duration (uptime), screenshots_since_last, pending_upload_count);
+        sb.append (stats);
+        html.append ("<br><br>");
+        html.append (Markup.escape_text (stats.strip ()).replace ("\n", "<br>"));
 
         // ── Deadline ──
         var deadline_minutes = (int64) interval_seconds * 2 / 60;
-        sb.append_printf (
-            "\n\nIf no new message arrives within %lld minutes, something may be wrong.",
+        var deadline = "\n\nIf no new message arrives within %lld minutes, something may be wrong.".printf (
             deadline_minutes);
+        sb.append (deadline);
+        html.append ("<br><br>");
+        html.append (Markup.escape_text (deadline.strip ()));
 
         // ═══════════════════════════════════════════════════════════
         //  Section 2: Verification data (below separator)
@@ -332,23 +414,31 @@ public class Vigil.Services.HeartbeatService : Object {
 
         sb.append ("\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n");
         sb.append ("Verification data (you can ignore this section):");
+        html.append ("<br><br>\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500<br>");
+        html.append ("Verification data (you can ignore this section):<br><pre>");
 
         var prev_hash = previous_heartbeat_hash != ""
             ? previous_heartbeat_hash : "genesis";
-        sb.append_printf ("\nseq: %lld | lifetime: %lld | prev: %s",
+        var seq_line = "seq: %lld | lifetime: %lld | prev: %s".printf (
             sequence_number, lifetime_captures, prev_hash);
+        sb.append_printf ("\n%s", seq_line);
+        html.append (Markup.escape_text (seq_line));
 
         if (!_attestation_sent && environment_attestation != "") {
-            sb.append_printf ("\nenv: %s", environment_attestation);
+            var env_line = "env: %s".printf (environment_attestation);
+            sb.append_printf ("\n%s", env_line);
+            html.append_printf ("\n%s", Markup.escape_text (env_line));
             _attestation_sent = true;
         }
 
         if (config_hash != "") {
             sb.append_printf ("\nconfig: %s", config_hash);
+            html.append_printf ("\nconfig: %s", Markup.escape_text (config_hash));
             if (encryption != null && encryption.is_ready) {
                 var signature = encryption.sign_string (config_hash);
                 if (signature != "") {
                     sb.append_printf (" | sig: %s", signature);
+                    html.append_printf (" | sig: %s", Markup.escape_text (signature));
                 }
             }
         }
@@ -359,17 +449,24 @@ public class Vigil.Services.HeartbeatService : Object {
                 hash_concat.append (_capture_hashes[i]);
             }
             var digest = SecurityUtils.compute_sha256_hex_string (hash_concat.str);
-            sb.append_printf ("\ncaptures: %d | digest: %s",
+            var cap_line = "captures: %d | digest: %s".printf (
                 (int) _capture_hashes.length, digest);
+            sb.append_printf ("\n%s", cap_line);
+            html.append_printf ("\n%s", Markup.escape_text (cap_line));
         }
 
         if (encryption != null && encryption.is_ready) {
             var chain_hash = SecurityUtils.compute_sha256_hex_string (sb.str);
             var chain_sig = encryption.sign_string (chain_hash);
             if (chain_sig != "") {
-                sb.append_printf ("\nchain: %s | sig: %s", chain_hash, chain_sig);
+                var chain_line = "chain: %s | sig: %s".printf (chain_hash, chain_sig);
+                sb.append_printf ("\n%s", chain_line);
+                html.append_printf ("\n%s", Markup.escape_text (chain_line));
             }
         }
+
+        html.append ("</pre>");
+        html_body = html.str;
 
         return sb.str;
     }
@@ -405,6 +502,17 @@ public class Vigil.Services.HeartbeatService : Object {
      * Raw events use "event_type: technical details" format. This method
      * replaces them with descriptions a non-technical person can understand.
      */
+    /**
+     * Check whether a raw event string represents a warning (not a tamper attempt).
+     *
+     * Warning events are prefixed with "~" by TamperDetectionService to
+     * indicate they are system issues or legitimate setting changes, not
+     * active tampering.
+     */
+    public static bool is_warning_event (string raw_event) {
+        return raw_event.has_prefix ("~");
+    }
+
     public static string describe_tamper_event (string raw_event) {
         var colon_pos = raw_event.index_of (": ");
         if (colon_pos < 0) {
@@ -412,98 +520,125 @@ public class Vigil.Services.HeartbeatService : Object {
         }
 
         var event_type = raw_event.substring (0, colon_pos);
+        // Strip warning prefix before lookup
+        if (event_type.has_prefix ("~")) {
+            event_type = event_type.substring (1);
+        }
 
         switch (event_type) {
             case "monitoring_disabled":
-                return "Screenshot monitoring was turned off.";
+                return "Screenshot monitoring was turned off. " +
+                    "No screenshots are being taken.";
             case "interval_tampered":
-                return "Screenshot timing was changed to take very few screenshots.";
+                return "Screenshot timing was changed to take very " +
+                    "few screenshots. Long gaps between screenshots " +
+                    "mean activity is going unmonitored.";
             case "timer_tampered":
-                return "Internal timing settings were changed to unsafe values.";
+                return "Vigil\u2019s check-in timing was changed to very " +
+                    "long intervals. You will receive fewer updates " +
+                    "and problems will be detected much slower.";
             case "matrix_cleared":
                 return "All connection settings were deleted. " +
                     "Vigil can no longer send you messages or screenshots.";
             case "matrix_incomplete":
                 return "Some connection settings were deleted. " +
-                    "The connection to you may be broken.";
+                    "Vigil\u2019s connection to you is broken \u2014 " +
+                    "you will NOT receive screenshots or updates " +
+                    "until this is fixed.";
             case "partner_changed":
-                return "Your partner ID was changed or removed. " +
-                    "Someone may be trying to stop messages from reaching you.";
+                return "Your partner ID was removed from the settings. " +
+                    "Messages and screenshots will no longer be sent to you.";
             case "e2ee_disabled":
                 return "Encryption keys were deleted. " +
                     "Screenshots cannot be sent securely.";
             case "autostart_missing":
-                return "Vigil\u2019s autostart was removed. " +
-                    "Vigil will not start automatically after the next reboot.";
+                return "Vigil\u2019s autostart entry was deleted. " +
+                    "Someone is trying to uninstall Vigil. " +
+                    "It will NOT restart after the next reboot.";
             case "autostart_modified":
-                return "Vigil\u2019s autostart was changed to point to " +
-                    "a different program.";
+                return "Vigil\u2019s autostart was changed to launch " +
+                    "a different program instead of Vigil. Someone " +
+                    "is replacing Vigil with something else.";
             case "autostart_unreadable":
-                return "Vigil\u2019s autostart file cannot be read. " +
-                    "Its permissions may have been changed.";
+                return "Vigil\u2019s autostart file permissions were changed " +
+                    "so Vigil cannot read it. Someone is tampering " +
+                    "with Vigil\u2019s startup configuration.";
             case "systemd_disabled":
                 return "Vigil\u2019s background service was disabled. " +
-                    "Vigil may not restart automatically if stopped.";
+                    "Someone is trying to uninstall Vigil. " +
+                    "It will NOT restart if stopped or after a reboot.";
             case "settings_unlocked":
-                return "The settings lock was bypassed without the unlock code.";
+                return "The settings lock was bypassed without " +
+                    "the unlock code.";
             case "unlock_code_cleared":
                 return "The unlock code was erased while settings " +
-                    "are still supposed to be locked.";
-            case "binary_missing":
-                return "The Vigil program file was deleted. " +
-                    "Someone may be trying to uninstall Vigil.";
-            case "binary_modified":
-                return "The Vigil program file was replaced or modified.";
-            case "binary_unreadable":
-                return "The Vigil program file cannot be read. " +
-                    "Its permissions may have been changed.";
+                    "are locked. Someone is trying to bypass " +
+                    "the settings lock.";
             case "capture_stalled":
-                return "No screenshot was taken when expected. " +
-                    "The screenshot system may have stopped working.";
+                return "No screenshot has been taken when expected. " +
+                    "The screenshot system has stopped working \u2014 " +
+                    "activity is NOT being monitored.";
             case "orphan_screenshots":
-                return "Some screenshots are missing their upload markers. " +
-                    "They may have been tampered with to prevent upload.";
+                return "Upload markers were deleted to prevent " +
+                    "screenshots from being sent to you.";
             case "disk_space_low":
                 return "The device is almost out of storage space. " +
-                    "Screenshots may not be saved.";
+                    "New screenshots cannot be saved.";
             case "screenshot_tampered":
                 return "A screenshot was modified after it was taken. " +
-                    "Someone may have tried to edit it before it was sent.";
+                    "Someone edited it before it was sent to you.";
             case "capture_counter_tampered":
-                return "The screenshot counter was tampered with.";
+                return "The screenshot counter was tampered with. " +
+                    "Someone is trying to hide how many screenshots " +
+                    "were taken.";
             case "e2ee_init_failed":
                 return "Encryption failed to start. Screenshots are saved " +
                     "locally and will be sent once encryption recovers.";
             case "background_permission_revoked":
                 return "Permission for Vigil to run in the background " +
-                    "was revoked. Vigil may stop when the window is closed.";
+                    "was revoked. Vigil will stop running when the " +
+                    "window is closed and will NOT restart automatically.";
             case "ld_preload_detected":
-                return "A suspicious system setting was detected that could " +
-                    "be used to intercept Vigil\u2019s operations.";
+                return "The LD_PRELOAD environment variable is set. " +
+                    "Code is being injected into Vigil to intercept " +
+                    "its operations.";
             case "prctl_failed":
-                return "Vigil\u2019s security hardening failed to apply.";
+                return "Vigil\u2019s memory protection failed to activate. " +
+                    "Vigil\u2019s encryption keys and screenshots " +
+                    "are exposed to other programs.";
             case "screenshot_deleted":
-                return "A screenshot was unexpectedly deleted " +
-                    "before it could be sent.";
+                return "A screenshot was deleted before it could be " +
+                    "sent to you. Someone is destroying evidence.";
             case "marker_deleted":
-                return "An upload marker was deleted. Someone may be trying " +
-                    "to prevent a screenshot from being sent.";
+                return "An upload marker was deleted to prevent " +
+                    "a screenshot from being sent to you.";
             case "crypto_file_tampered":
-                return "An encryption file was deleted or modified. " +
-                    "Secure communication may be disrupted.";
+                return "An encryption file was deleted. Encrypted " +
+                    "communication with you is broken.";
             case "unmonitored_gap":
                 return "The device was not being monitored for a period " +
                     "of time (see above for details).";
             case "dumpable_reactivated":
-                return "A security protection was disabled and had to be " +
-                    "re-enabled. Someone may be trying to inspect " +
-                    "Vigil\u2019s memory.";
+                return "Vigil\u2019s memory protection was disabled by " +
+                    "another program. Someone is trying to read " +
+                    "Vigil\u2019s encryption keys from memory.";
+            case "ptrace_detected":
+                return "Another program is actively reading Vigil\u2019s " +
+                    "memory. Someone is extracting encryption keys " +
+                    "or manipulating Vigil.";
+            case "ld_so_preload_detected":
+                return "A system-wide code injection file " +
+                    "(/etc/ld.so.preload) is active. Code is being " +
+                    "injected into Vigil to intercept its operations.";
             case "display_service_gone":
-                return "The screenshot service has disappeared. " +
-                    "Screenshots may fail until it recovers.";
+                return "The screenshot service has stopped running. " +
+                    "Screenshots are NOT being taken \u2014 activity " +
+                    "is going unmonitored.";
             case "display_service_replaced":
                 return "The screenshot service was replaced with " +
-                    "a different program. Screenshots may not be genuine.";
+                    "a different program. Screenshots are NOT genuine " +
+                    "\u2014 they show fake images instead of the " +
+                    "real screen.";
             default:
                 return raw_event;
         }
@@ -518,9 +653,15 @@ public class Vigil.Services.HeartbeatService : Object {
         }
 
         sequence_number++;
-        var message = build_heartbeat_message ();
+        string? html_body;
+        var message = build_heartbeat_message (out html_body);
         var message_hash = SecurityUtils.compute_sha256_hex_string (message);
-        var sent = yield _matrix_svc.send_text_message (message);
+        bool sent;
+        if (html_body != null) {
+            sent = yield _matrix_svc.send_html_message (message, html_body);
+        } else {
+            sent = yield _matrix_svc.send_text_message (message);
+        }
 
         if (sent) {
             consecutive_failures = 0;

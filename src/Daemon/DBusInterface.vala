@@ -209,55 +209,13 @@ public class Vigil.Daemon.DBusServer : Object {
 
         _heartbeat_svc.lifetime_captures = _storage_svc.lifetime_captures;
 
-        // Wire binary integrity self-check
+        // Collect environment attestation for the first heartbeat
         try {
             var binary_path = FileUtils.read_link ("/proc/self/exe");
-            uint8[] binary_data;
-            FileUtils.get_data (binary_path, out binary_data);
-            var binary_hash = Vigil.Services.SecurityUtils.compute_sha256_hex (binary_data);
-
-            _tamper_svc.daemon_binary_path = binary_path;
-            _tamper_svc.expected_binary_hash = binary_hash;
-
-            // Cross-session detection: compare with previously stored hash.
-            // Store in crypto/ dir so inotify watches catch tampering.
-            var hash_file = Path.build_filename (
-                Vigil.Services.SecurityUtils.get_crypto_dir (), "binary_hash");
-
-            // Migrate from old location (app_data_dir) if needed
-            var old_hash_file = Path.build_filename (
-                Vigil.Services.SecurityUtils.get_app_data_dir (), "binary_hash");
-            if (!FileUtils.test (hash_file, FileTest.EXISTS) &&
-                FileUtils.test (old_hash_file, FileTest.EXISTS)) {
-                try {
-                    string old_contents;
-                    FileUtils.get_contents (old_hash_file, out old_contents);
-                    Vigil.Services.SecurityUtils.write_secure_file (hash_file, old_contents);
-                    FileUtils.remove (old_hash_file);
-                } catch (Error migrate_err) {
-                    debug ("Could not migrate binary_hash: %s", migrate_err.message);
-                }
-            }
-
-            if (FileUtils.test (hash_file, FileTest.EXISTS)) {
-                string stored_hash;
-                FileUtils.get_contents (hash_file, out stored_hash);
-                stored_hash = stored_hash.strip ();
-                if (stored_hash != "" && stored_hash != binary_hash) {
-                    _tamper_svc.report_tamper ("binary_modified",
-                        "Daemon binary changed since last run (was %s, now %s)".printf (
-                            stored_hash.substring (0, 16) + "\u2026",
-                            binary_hash.substring (0, 16) + "\u2026"));
-                }
-            }
-            Vigil.Services.SecurityUtils.write_secure_file (hash_file, binary_hash);
-
-            // Collect environment attestation for the first heartbeat
             _heartbeat_svc.environment_attestation =
-                Vigil.Services.SecurityUtils.collect_environment_attestation (
-                    binary_path, binary_hash);
+                Vigil.Services.SecurityUtils.collect_environment_attestation (binary_path);
         } catch (Error e) {
-            debug ("Could not set up binary integrity check: %s", e.message);
+            debug ("Could not collect environment attestation: %s", e.message);
         }
 
         yield _screenshot_svc.initialize ();
@@ -358,7 +316,7 @@ public class Vigil.Daemon.DBusServer : Object {
         });
 
         _heartbeat_svc.gap_detected.connect ((gap_seconds) => {
-            _tamper_svc.report_tamper ("unmonitored_gap",
+            _tamper_svc.report_warning ("unmonitored_gap",
                 "Device was unmonitored for %lld minutes".printf (gap_seconds / 60));
         });
 
@@ -598,9 +556,9 @@ public class Vigil.Daemon.DBusServer : Object {
         debug ("Key sharing failed, will retry in 60s");
         _key_sharing_source = Timeout.add_seconds (60, () => {
             _key_sharing_source = 0;
-            var pid = _settings.get_string ("partner-matrix-id");
-            if (pid != "" && !_room_keys_shared) {
-                attempt_key_sharing.begin (pid);
+            var current_partner = _settings.get_string ("partner-matrix-id");
+            if (current_partner != "" && !_room_keys_shared) {
+                attempt_key_sharing.begin (current_partner);
             }
             return Source.REMOVE;
         });
@@ -615,7 +573,7 @@ public class Vigil.Daemon.DBusServer : Object {
 
             if (free_bytes < 50 * 1024 * 1024) {
                 var free_mb = (int64) (free_bytes / (1024 * 1024));
-                _tamper_svc.report_tamper ("disk_space_low",
+                _tamper_svc.report_warning ("disk_space_low",
                     "Less than 50 MB disk space remaining (%lld MB free), ".printf (free_mb) +
                     "screenshots cannot be stored");
                 return;
