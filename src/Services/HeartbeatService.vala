@@ -772,12 +772,18 @@ public class Vigil.Services.HeartbeatService : Object {
             FileUtils.get_contents (path, out contents);
             var lines = contents.split ("\n");
 
-            if (lines.length >= 1 && lines[0].strip () != "") {
-                sequence_number = int64.parse (lines[0].strip ());
+            if (lines.length >= 1) {
+                var seq_str = lines[0].strip ();
+                if (seq_str != "") {
+                    sequence_number = int64.parse (seq_str);
+                }
             }
 
-            if (lines.length >= 2 && lines[1].strip () != "") {
-                previous_heartbeat_hash = lines[1].strip ();
+            if (lines.length >= 2) {
+                var prev_hash = lines[1].strip ();
+                if (prev_hash != "") {
+                    previous_heartbeat_hash = prev_hash;
+                }
             }
 
             if (sequence_number > 0 || previous_heartbeat_hash != "") {

@@ -22,6 +22,8 @@ soup_dep = dependency('libsoup-3.0', version: '>= 3.0')
 portal_dep = dependency('libportal', version: '>= 0.6')
 olm_dep = dependency('olm', version: '>= 3.0')
 openssl_dep = dependency('openssl', version: '>= 1.1.0')
+cc = meson.get_compiler('c')
+m_dep = cc.find_library('m', required: false)
 
 add_project_arguments(
     '-DGETTEXT_PACKAGE="@0@"'.format(app_id),
@@ -75,6 +77,7 @@ all_dependencies = [
     portal_dep,
     olm_dep,
     openssl_dep,
+    m_dep,
 ]
 
 # ──────────────────────────────────────────────────────────────
@@ -139,6 +142,7 @@ gui_dbus_src = files(
 ui_src_files = files(
     'src' / 'MainWindow.vala',
     'src' / 'Widgets' / 'StatusView.vala',
+    'src' / 'Widgets' / 'RangeScale.vala',
     'src' / 'Widgets' / 'SettingsView.vala',
 )
 

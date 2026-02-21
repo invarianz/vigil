@@ -239,13 +239,12 @@ public class Vigil.Services.TamperDetectionService : Object {
         // secret, to avoid passing the key through unnecessary code paths.
         var pickle_key_set = _settings.get_string ("e2ee-pickle-key") != "";
 
-        var data = "%s|%s|%s|%d|%d|%d|%b|%s|%b|%s|%d|%d|%d".printf (
+        var data = "%s|%s|%s|%d|%d|%b|%s|%b|%s|%d|%d|%d".printf (
             _settings.get_string ("matrix-homeserver-url"),
             _settings.get_string ("matrix-access-token"),
             _settings.get_string ("matrix-room-id"),
             _settings.get_int ("min-interval-seconds"),
             _settings.get_int ("max-interval-seconds"),
-            _settings.get_int ("max-local-screenshots"),
             _settings.get_boolean ("monitoring-enabled"),
             _settings.get_string ("device-id"),
             pickle_key_set,
@@ -327,20 +326,25 @@ public class Vigil.Services.TamperDetectionService : Object {
                 "Monitoring has been disabled via settings");
         }
 
-        // Check if intervals have been set too high (> 5 minutes)
-        // The absolute maximum gap between screenshots should be 2 minutes,
-        // so anything above 5 minutes is clearly tampered.
+        // Check screenshot interval bounds.
+        // Valid range: 30-120 seconds with >= 30s gap between min and max.
+        // Any values outside these bounds indicate direct dconf tampering.
         int min_interval = _settings.get_int ("min-interval-seconds");
         int max_interval = _settings.get_int ("max-interval-seconds");
 
-        if (min_interval >= 300) {
-            emit_lock_dependent (locked, "interval_tampered",
-                "Minimum interval set to %d seconds (>= 5 minutes)".printf (min_interval));
+        if (min_interval < 30) {
+            emit_tamper ("interval_tampered",
+                "Minimum interval set to %d seconds (below 30s floor)".printf (min_interval));
         }
 
-        if (max_interval >= 300) {
-            emit_lock_dependent (locked, "interval_tampered",
-                "Maximum interval set to %d seconds (>= 5 minutes)".printf (max_interval));
+        if (max_interval > 120) {
+            emit_tamper ("interval_tampered",
+                "Maximum interval set to %d seconds (above 2 minute ceiling)".printf (max_interval));
+        }
+
+        if (max_interval - min_interval < 30 && min_interval >= 30 && max_interval <= 120) {
+            emit_tamper ("interval_tampered",
+                "Interval gap is %d seconds (below 30s minimum gap)".printf (max_interval - min_interval));
         }
 
         // Check if Matrix transport was cleared (only after setup is complete,

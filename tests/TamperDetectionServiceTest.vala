@@ -185,12 +185,11 @@ void test_settings_sanity_monitoring_disabled_locked () {
     settings.set_string ("unlock-code-hash", "");
 }
 
-void test_settings_sanity_interval_tampered_unlocked () {
+void test_settings_sanity_interval_tampered_below_floor () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
-    settings.set_int ("min-interval-seconds", 600);
-    settings.set_boolean ("settings-locked", false);
-    // Set Matrix settings so matrix_cleared / partner_changed don't also fire
+    settings.set_int ("min-interval-seconds", 5);
+    settings.set_int ("max-interval-seconds", 120);
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
@@ -206,18 +205,18 @@ void test_settings_sanity_interval_tampered_unlocked () {
     });
 
     svc.check_settings_sanity ();
-    assert_true (first_event == "~interval_tampered");
+    // Always tamper — can only happen via direct dconf editing
+    assert_true (first_event == "interval_tampered");
 
     // Reset
     settings.set_int ("min-interval-seconds", 30);
 }
 
-void test_settings_sanity_interval_tampered_locked () {
+void test_settings_sanity_interval_tampered_above_ceiling () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
-    settings.set_int ("min-interval-seconds", 600);
-    settings.set_boolean ("settings-locked", true);
-    settings.set_string ("unlock-code-hash", "test-hash");
+    settings.set_int ("min-interval-seconds", 30);
+    settings.set_int ("max-interval-seconds", 600);
     settings.set_string ("matrix-homeserver-url", "https://matrix.org");
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
@@ -233,12 +232,39 @@ void test_settings_sanity_interval_tampered_locked () {
     });
 
     svc.check_settings_sanity ();
+    // Always tamper — can only happen via direct dconf editing
+    assert_true (first_event == "interval_tampered");
+
+    // Reset
+    settings.set_int ("max-interval-seconds", 120);
+}
+
+void test_settings_sanity_interval_tampered_gap_too_small () {
+    var settings = new GLib.Settings ("io.github.invarianz.vigil");
+    settings.set_boolean ("monitoring-enabled", true);
+    settings.set_int ("min-interval-seconds", 60);
+    settings.set_int ("max-interval-seconds", 70);
+    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
+    settings.set_string ("matrix-access-token", "test-token");
+    settings.set_string ("matrix-room-id", "!room:test");
+    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
+
+    var svc = new Vigil.Services.TamperDetectionService (settings);
+
+    string? first_event = null;
+    svc.tamper_detected.connect ((t, d) => {
+        if (first_event == null) {
+            first_event = t;
+        }
+    });
+
+    svc.check_settings_sanity ();
+    // Always tamper — gap below 30s minimum
     assert_true (first_event == "interval_tampered");
 
     // Reset
     settings.set_int ("min-interval-seconds", 30);
-    settings.set_boolean ("settings-locked", false);
-    settings.set_string ("unlock-code-hash", "");
+    settings.set_int ("max-interval-seconds", 120);
 }
 
 void test_settings_sanity_matrix_cleared () {
@@ -1007,8 +1033,8 @@ void test_settings_exact_boundary_triggers_tamper () {
     settings.set_boolean ("settings-locked", true);
     settings.set_string ("unlock-code-hash", "test-hash");
 
-    // Set values exactly at the boundary thresholds
-    settings.set_int ("min-interval-seconds", 300);
+    // Set values outside valid bounds (both below floor and above ceiling)
+    settings.set_int ("min-interval-seconds", 10);
     settings.set_int ("max-interval-seconds", 300);
     settings.set_int ("heartbeat-interval-seconds", 3600);
     settings.set_int ("upload-batch-interval-seconds", 3600);
@@ -1068,10 +1094,12 @@ public static int main (string[] args) {
         test_settings_sanity_monitoring_disabled_unlocked);
     Test.add_func ("/tamper/settings_monitoring_disabled_locked",
         test_settings_sanity_monitoring_disabled_locked);
-    Test.add_func ("/tamper/settings_interval_tampered_unlocked",
-        test_settings_sanity_interval_tampered_unlocked);
-    Test.add_func ("/tamper/settings_interval_tampered_locked",
-        test_settings_sanity_interval_tampered_locked);
+    Test.add_func ("/tamper/settings_interval_tampered_below_floor",
+        test_settings_sanity_interval_tampered_below_floor);
+    Test.add_func ("/tamper/settings_interval_tampered_above_ceiling",
+        test_settings_sanity_interval_tampered_above_ceiling);
+    Test.add_func ("/tamper/settings_interval_tampered_gap_too_small",
+        test_settings_sanity_interval_tampered_gap_too_small);
     Test.add_func ("/tamper/settings_matrix_cleared", test_settings_sanity_matrix_cleared);
     Test.add_func ("/tamper/settings_matrix_incomplete", test_settings_sanity_matrix_incomplete);
     Test.add_func ("/tamper/start_stop_lifecycle", test_start_stop_lifecycle);

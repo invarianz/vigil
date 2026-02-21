@@ -24,7 +24,7 @@ public class Vigil.Services.StorageService : Object {
     public signal void capture_hashed (string sha256_hex);
 
     /** Maximum number of screenshots to retain locally. */
-    public int max_local_screenshots { get; set; default = 100; }
+    public int max_local_screenshots { get; set; default = 1000; }
 
     /** Directory where screenshots are stored. */
     public string screenshots_dir { get; private set; }
@@ -429,14 +429,16 @@ public class Vigil.Services.StorageService : Object {
             FileUtils.get_contents (path, out contents);
             var lines = contents.split ("\n");
 
-            if (lines.length >= 1 && lines[0].strip () != "") {
-                lifetime_captures = int64.parse (lines[0].strip ());
+            var count_str = lines.length >= 1 ? lines[0].strip () : "";
+            if (count_str != "") {
+                lifetime_captures = int64.parse (count_str);
             }
 
             // Verify HMAC if key is set and file has an HMAC line
-            if (hmac_key != "" && lines.length >= 2 && lines[1].strip () != "") {
-                var expected_hmac = compute_hmac (lines[0].strip ());
-                var stored_hmac = lines[1].strip ();
+            var hmac_str = lines.length >= 2 ? lines[1].strip () : "";
+            if (hmac_key != "" && hmac_str != "") {
+                var expected_hmac = compute_hmac (count_str);
+                var stored_hmac = hmac_str;
                 if (expected_hmac != stored_hmac) {
                     capture_counter_tampered = true;
                 }

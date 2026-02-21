@@ -30,14 +30,9 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
     private Gtk.PasswordEntry e2ee_password_entry;
     private Gtk.Button setup_button;
     private Gtk.Label status_label;
-    private Gtk.SpinButton min_interval_spin;
-    private Gtk.SpinButton max_interval_spin;
-    private Gtk.SpinButton retention_spin;
+    private Vigil.Widgets.RangeScale interval_range;
 
     private Gtk.Box setup_box;
-    private Gtk.Box advanced_box;
-    private Granite.HeaderLabel setup_header;
-    private Granite.HeaderLabel advanced_header;
     private Gtk.Entry unlock_entry;
     private Gtk.Button unlock_button;
     private Gtk.Button lock_button;
@@ -111,11 +106,8 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         lock_box.append (unlock_row);
         lock_box.append (lock_button);
 
-        // --- Account setup section ---
-        setup_header = new Granite.HeaderLabel ("Account Setup");
-
         homeserver_entry = new Gtk.Entry () {
-            placeholder_text = "e.g. matrix.org or https://matrix.example.com",
+            placeholder_text = "matrix.org",
             hexpand = true
         };
         var existing_hs = settings.get_string ("matrix-homeserver-url");
@@ -175,7 +167,7 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             margin_end = 16
         };
 
-        setup_box.append (create_form_row ("Homeserver", homeserver_entry));
+        setup_box.append (create_form_row ("Matrix Server", homeserver_entry));
         setup_box.append (create_form_row ("Username", username_entry));
         setup_box.append (create_form_row ("Password", password_entry));
         setup_box.append (create_form_row ("Partner Matrix ID", partner_entry));
@@ -183,42 +175,23 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         setup_box.append (setup_button);
         setup_box.append (status_label);
 
-        // --- Advanced section (collapsed) ---
-        advanced_header = new Granite.HeaderLabel ("Advanced");
-
-        min_interval_spin = new Gtk.SpinButton.with_range (10, 120, 5);
-        min_interval_spin.value = settings.get_int ("min-interval-seconds");
-        min_interval_spin.value_changed.connect (() => {
-            settings.set_int ("min-interval-seconds", (int) min_interval_spin.value);
+        // --- Screenshot interval range slider ---
+        interval_range = new Vigil.Widgets.RangeScale (
+            30, 120, 5, 30,
+            settings.get_int ("min-interval-seconds"),
+            settings.get_int ("max-interval-seconds")
+        );
+        interval_range.values_changed.connect (() => {
+            settings.set_int ("min-interval-seconds", (int) interval_range.lower_value);
+            settings.set_int ("max-interval-seconds", (int) interval_range.upper_value);
         });
 
-        max_interval_spin = new Gtk.SpinButton.with_range (30, 120, 5);
-        max_interval_spin.value = settings.get_int ("max-interval-seconds");
-        max_interval_spin.value_changed.connect (() => {
-            settings.set_int ("max-interval-seconds", (int) max_interval_spin.value);
-        });
-
-        retention_spin = new Gtk.SpinButton.with_range (10, 1000, 10);
-        settings.bind ("max-local-screenshots", retention_spin, "value", SettingsBindFlags.DEFAULT);
-
-        advanced_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 16) {
-            margin_top = 16,
-            margin_bottom = 16,
-            margin_start = 16,
-            margin_end = 16
-        };
-
-        advanced_box.append (create_form_row ("Minimum interval (seconds)", min_interval_spin));
-        advanced_box.append (create_form_row ("Maximum interval (seconds)", max_interval_spin));
-        advanced_box.append (create_form_row ("Maximum local screenshots", retention_spin));
+        setup_box.append (create_form_row ("Screenshot interval", interval_range));
 
         // Assemble the view
         append (lock_header);
         append (lock_box);
-        append (setup_header);
         append (setup_box);
-        append (advanced_header);
-        append (advanced_box);
 
         // Apply initial lock state
         update_lock_ui ();
@@ -553,7 +526,6 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             lock_header.visible = false;
             lock_box.visible = false;
             setup_box.sensitive = true;
-            advanced_box.sensitive = true;
             return;
         }
 
@@ -571,21 +543,15 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
             unlock_entry.visible = true;
             unlock_button.visible = true;
             lock_button.visible = false;
-            // Hide setup and advanced entirely when locked
-            setup_header.visible = false;
+            // Hide setup entirely when locked
             setup_box.visible = false;
-            advanced_header.visible = false;
-            advanced_box.visible = false;
         } else {
             lock_status_label.label = "Settings are unlocked. Make your changes, then lock when done.";
             lock_status_label.remove_css_class ("error");
             unlock_entry.visible = false;
             unlock_button.visible = false;
             lock_button.visible = true;
-            setup_header.visible = true;
             setup_box.visible = true;
-            advanced_header.visible = true;
-            advanced_box.visible = true;
         }
     }
 

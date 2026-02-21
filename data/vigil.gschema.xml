@@ -67,12 +67,6 @@
       <summary>E2EE password used to encrypt Olm/Megolm state at rest</summary>
     </key>
 
-    <!-- Storage -->
-    <key name="max-local-screenshots" type="i">
-      <default>100</default>
-      <summary>Maximum number of screenshots to keep locally</summary>
-    </key>
-
     <!-- Settings lock -->
     <key name="settings-locked" type="b">
       <default>false</default>
@@ -84,10 +78,6 @@
     </key>
 
     <!-- System -->
-    <key name="autostart-enabled" type="b">
-      <default>false</default>
-      <summary>Start Vigil at login</summary>
-    </key>
     <key name="background-portal-granted" type="b">
       <default>false</default>
       <summary>Whether the XDG Background portal granted autostart permission</summary>

@@ -340,7 +340,6 @@ public class Vigil.Daemon.DBusServer : Object {
     private void apply_settings () {
         _scheduler_svc.min_interval_seconds = _settings.get_int ("min-interval-seconds");
         _scheduler_svc.max_interval_seconds = _settings.get_int ("max-interval-seconds");
-        _storage_svc.max_local_screenshots = _settings.get_int ("max-local-screenshots");
         _heartbeat_svc.interval_seconds = _settings.get_int ("heartbeat-interval-seconds");
         _batch_upload_interval = _settings.get_int ("upload-batch-interval-seconds");
 
@@ -375,9 +374,6 @@ public class Vigil.Daemon.DBusServer : Object {
         });
         _settings.changed["max-interval-seconds"].connect (() => {
             _scheduler_svc.max_interval_seconds = _settings.get_int ("max-interval-seconds");
-        });
-        _settings.changed["max-local-screenshots"].connect (() => {
-            _storage_svc.max_local_screenshots = _settings.get_int ("max-local-screenshots");
         });
         _settings.changed["matrix-homeserver-url"].connect (() => {
             _matrix_svc.homeserver_url = _settings.get_string ("matrix-homeserver-url");
