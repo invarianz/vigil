@@ -17,10 +17,11 @@ void test_build_heartbeat_message_basic () {
 
     var msg = svc.build_heartbeat_message ();
 
-    assert_true (msg.contains ("Vigil active"));
-    assert_true (msg.contains ("screenshots: 5"));
-    assert_true (msg.contains ("pending: 2"));
-    assert_true (msg.contains ("next check-in by:"));
+    assert_true (msg.contains ("STATUS: All clear"));
+    assert_true (msg.contains ("Screenshots taken: 5"));
+    assert_true (msg.contains ("Waiting to send: 2"));
+    assert_true (msg.contains ("arrives within"));
+    assert_true (msg.contains ("something may be wrong"));
 }
 
 void test_build_heartbeat_message_with_tamper_events () {
@@ -31,9 +32,11 @@ void test_build_heartbeat_message_with_tamper_events () {
 
     var msg = svc.build_heartbeat_message ();
 
-    assert_true (msg.contains ("Tamper events:"));
-    assert_true (msg.contains ("autostart_missing: file deleted"));
-    assert_true (msg.contains ("systemd_disabled: service stopped"));
+    assert_true (msg.contains ("WARNING: Suspicious activity detected!"));
+    assert_true (msg.contains ("problems were found"));
+    // Human-friendly descriptions
+    assert_true (msg.contains ("autostart was removed"));
+    assert_true (msg.contains ("background service was disabled"));
 }
 
 void test_start_stop_lifecycle () {
@@ -131,9 +134,9 @@ void test_gap_detection_in_message () {
     svc.start ();
     svc.stop ();
 
-    // Normal message (no gap) should not contain "resumed"
+    // Normal message (no gap) should not contain gap notice
     var msg = svc.build_heartbeat_message ();
-    assert_false (msg.contains ("resumed"));
+    assert_false (msg.contains ("Back online"));
 }
 
 void test_offline_notice_without_matrix () {
@@ -193,7 +196,7 @@ void test_message_size_capped () {
     }
 
     var msg = svc.build_heartbeat_message ();
-    // Message should be capped at ~60KB
+    // Message should be capped at ~65KB
     assert_true (msg.length <= 65000);
     // Should mention total count
     assert_true (msg.contains ("200 total"));
@@ -285,10 +288,9 @@ void test_gap_fires_tamper_event () {
     });
 
     var msg = svc.build_heartbeat_message ();
-    assert_true (msg.contains ("ALERT"));
-    assert_true (msg.contains ("unmonitored gap"));
-    assert_true (msg.contains ("Tamper events:"));
-    assert_true (msg.contains ("unmonitored_gap"));
+    assert_true (msg.contains ("NOTICE: Back online"));
+    assert_true (msg.contains ("not monitoring for"));
+    assert_true (msg.contains ("Going offline"));
     assert_true (signal_fired);
     assert_true (reported_gap >= 2);
 }
@@ -324,6 +326,99 @@ void test_capture_digest_absent_when_no_captures () {
     var msg = svc.build_heartbeat_message ();
     assert_false (msg.contains ("captures:"));
     assert_false (msg.contains ("digest:"));
+}
+
+void test_verification_section_below_separator () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.config_hash = "abc123";
+
+    var msg = svc.build_heartbeat_message ();
+
+    // Verification data should be below the separator
+    var sep_pos = msg.index_of ("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500");
+    assert_true (sep_pos >= 0);
+    assert_true (msg.contains ("Verification data"));
+    assert_true (msg.contains ("config: abc123"));
+
+    // Config hash should appear AFTER the separator
+    var config_pos = msg.index_of ("config: abc123");
+    assert_true (config_pos > sep_pos);
+}
+
+void test_describe_tamper_event_known () {
+    var result = Vigil.Services.HeartbeatService.describe_tamper_event (
+        "autostart_missing: Autostart desktop entry is missing");
+    assert_true (result.contains ("autostart was removed"));
+
+    result = Vigil.Services.HeartbeatService.describe_tamper_event (
+        "binary_modified: hash mismatch");
+    assert_true (result.contains ("replaced or modified"));
+}
+
+void test_describe_tamper_event_unknown () {
+    var raw = "unknown_event: some details";
+    var result = Vigil.Services.HeartbeatService.describe_tamper_event (raw);
+    // Unknown events returned as-is
+    assert_true (result == raw);
+}
+
+void test_describe_tamper_event_no_colon () {
+    var raw = "bare event without colon separator";
+    var result = Vigil.Services.HeartbeatService.describe_tamper_event (raw);
+    assert_true (result == raw);
+}
+
+void test_format_duration () {
+    assert_true (Vigil.Services.HeartbeatService.format_duration (0) ==
+        "less than a minute");
+    assert_true (Vigil.Services.HeartbeatService.format_duration (30) ==
+        "less than a minute");
+    assert_true (Vigil.Services.HeartbeatService.format_duration (60) ==
+        "1 minute");
+    assert_true (Vigil.Services.HeartbeatService.format_duration (300) ==
+        "5 minutes");
+    assert_true (Vigil.Services.HeartbeatService.format_duration (3600) ==
+        "1 hour");
+    assert_true (Vigil.Services.HeartbeatService.format_duration (7200) ==
+        "2 hours");
+    assert_true (Vigil.Services.HeartbeatService.format_duration (5400) ==
+        "1 hour 30 minutes");
+    assert_true (Vigil.Services.HeartbeatService.format_duration (3660) ==
+        "1 hour 1 minute");
+}
+
+void test_gap_with_tamper_shows_warning_header () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    svc.interval_seconds = 1;
+
+    // Add a real tamper event
+    svc.report_tamper_event ("autostart_missing: file deleted");
+
+    svc.start ();
+    svc.stop ();
+
+    Thread.usleep (3000000);
+
+    var msg = svc.build_heartbeat_message ();
+    // Should show WARNING (not NOTICE) because of the real tamper event
+    assert_true (msg.contains ("WARNING: Suspicious activity detected!"));
+    // Gap info should still be present
+    assert_true (msg.contains ("Also, Vigil was not monitoring"));
+}
+
+void test_network_recovery_message () {
+    var svc = new Vigil.Services.HeartbeatService ();
+    // Simulate 3 consecutive failures (set the backing field via property)
+    // We need to call send_heartbeat to increment, but we can't without Matrix
+    // So just check the message format when consecutive_failures > 0
+    // We'll use reflection-style approach: build message shows recovery info
+
+    // Use a fresh service, manually set internal state
+    var svc2 = new Vigil.Services.HeartbeatService ();
+    // consecutive_failures is read-only from outside, but we can check
+    // the message format when it's 0 (no recovery message)
+    var msg = svc2.build_heartbeat_message ();
+    assert_false (msg.contains ("could not reach the server"));
 }
 
 public static int main (string[] args) {
@@ -379,6 +474,20 @@ public static int main (string[] args) {
         test_capture_digest_in_message);
     Test.add_func ("/heartbeat/capture_digest_absent_no_captures",
         test_capture_digest_absent_when_no_captures);
+    Test.add_func ("/heartbeat/verification_below_separator",
+        test_verification_section_below_separator);
+    Test.add_func ("/heartbeat/describe_tamper_known",
+        test_describe_tamper_event_known);
+    Test.add_func ("/heartbeat/describe_tamper_unknown",
+        test_describe_tamper_event_unknown);
+    Test.add_func ("/heartbeat/describe_tamper_no_colon",
+        test_describe_tamper_event_no_colon);
+    Test.add_func ("/heartbeat/format_duration",
+        test_format_duration);
+    Test.add_func ("/heartbeat/gap_with_tamper_shows_warning",
+        test_gap_with_tamper_shows_warning_header);
+    Test.add_func ("/heartbeat/network_recovery",
+        test_network_recovery_message);
 
     return Test.run ();
 }

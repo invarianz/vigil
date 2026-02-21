@@ -1016,11 +1016,13 @@ public class Vigil.Services.MatrixTransportService : Object {
             return false;
         }
 
-        var plain = "TAMPER ALERT [%s]: %s".printf (event_type, details);
-        var html = "<strong>TAMPER ALERT [%s]</strong><br><blockquote>%s</blockquote>".printf (
-            Markup.escape_text (event_type),
-            Markup.escape_text (details)
-        );
+        var raw_event = "%s: %s".printf (event_type, details);
+        var friendly = Vigil.Services.HeartbeatService.describe_tamper_event (raw_event);
+
+        var plain = "WARNING: %s\n\nIf you did not authorize this change, please investigate."
+            .printf (friendly);
+        var html = "<strong>WARNING:</strong> %s<br><br><em>If you did not authorize this change, please investigate.</em>"
+            .printf (Markup.escape_text (friendly));
 
         var builder = new Json.Builder ();
         builder.begin_object ();

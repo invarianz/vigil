@@ -94,88 +94,101 @@ Switch to the Status tab and enable monitoring. Vigil starts capturing in the ba
 
 ## What your partner sees
 
-Vigil communicates with your partner through different types of messages. Here's what each one looks like and what it means.
+Vigil sends messages your partner can understand at a glance -- no technical knowledge needed. Every message starts with a clear status line so your partner knows immediately if something is wrong.
 
 ### Normal operation
 
-> Vigil active | uptime: 2h 30m | screenshots: 15 | pending: 0 | seq: 10 | lifetime: 150 | prev: a3b8f1… | next check-in by: 14:35
+> STATUS: All clear
+>
+> Running for 2 hours 30 minutes.
+> Screenshots taken: 15
+> Waiting to send: 0
+>
+> If no new message arrives within 30 minutes, something may be wrong.
+>
+> ──────────
+> Verification data (you can ignore this section):
+> seq: 10 | lifetime: 150 | prev: a3b8f1…
 
-This is a regular heartbeat, sent every 15 minutes. It tells your partner everything is running smoothly. The `seq` number increments with each heartbeat, `lifetime` counts total screenshots ever taken, and `prev` is a hash chain linking to the previous heartbeat (so messages can't be silently deleted). The "next check-in by" time is the deadline -- if no new message arrives by then, something may be wrong.
+This is a regular heartbeat, sent every 15 minutes. The top section tells your partner everything is running smoothly. The verification data below the separator is for forensic purposes -- your partner can safely ignore it.
 
 ### Clean shutdown (computer turned off or restarted)
 
-> STATUS: Vigil going offline (clean shutdown, this is normal) | uptime was: 4h 12m | pending: 0
+> NOTICE: Going offline
+>
+> The computer is shutting down or restarting. This is normal.
+> Vigil will start again automatically when the computer turns back on.
+> You can ignore the deadline from the previous message -- silence is expected until the computer restarts.
+>
+> Was running for 4 hours 12 minutes. 0 screenshots waiting to send.
 
-When you shut down or restart your computer, Vigil sends this message before it stops. Your partner knows the silence that follows is expected and not suspicious. When your computer starts up again, the next heartbeat will report the gap as an alert:
-
-> Vigil active | uptime: 0h 1m | … | ALERT: resumed after 495m unmonitored gap | next check-in by: 08:20
+When you shut down or restart your computer, Vigil sends this message before it stops. Your partner knows the silence that follows is expected. The message explicitly tells them to ignore the deadline from the previous heartbeat.
 
 ### Sleep, wake, and unmonitored gaps
 
-Any gap longer than twice the heartbeat interval (including sleep, suspend, or SIGSTOP attacks) fires an `unmonitored_gap` tamper event. Your partner can see the gap duration and judge whether it makes sense (e.g. overnight sleep vs. suspicious midday silence).
+When the computer wakes up after sleep, or comes back after being off, Vigil tells your partner what happened:
+
+> NOTICE: Back online after 8 hours 15 minutes
+>
+> Vigil was not monitoring for 8 hours 15 minutes.
+> If you received a "Going offline" message before this gap, it was probably a normal shutdown or sleep.
+> If you did NOT receive a "Going offline" message, this could be suspicious.
+
+Your partner checks: did they see a "Going offline" message before the gap? If yes, it was a normal shutdown or sleep. If no, something suspicious may have happened.
 
 ### Network outage
 
-If Vigil can't reach the server, it keeps trying. Once the connection is restored, the heartbeat reports how many check-ins were missed:
+If Vigil can't reach the server, it keeps trying. Once the connection is restored:
 
-> Vigil active | uptime: 3h 0m | screenshots: 12 | pending: 5 | seq: 15 | lifetime: 80 | prev: f7c2e0… | recovering: 3 heartbeats were missed | next check-in by: 15:45
+> NOTICE: Connection restored
+>
+> Vigil was running but could not reach the server. 3 updates were missed.
+> Screenshots taken during the outage are now being sent.
 
 Screenshots taken while offline are queued and delivered as soon as the connection comes back.
 
 ### Tamper alerts
 
-If someone tries to interfere with Vigil, a bold alert is sent immediately -- it doesn't wait for the next heartbeat:
+If someone tries to interfere with Vigil, a warning is sent immediately -- it doesn't wait for the next heartbeat:
 
-> **TAMPER ALERT [autostart_missing]**
-> Autostart desktop entry is missing
+> **WARNING:** Vigil's autostart was removed. Vigil will not start automatically after the next reboot.
+>
+> *If you did not authorize this change, please investigate.*
 
-These alerts fire when:
+All warnings use plain language so your partner knows exactly what happened. Here are the types of problems Vigil can detect:
 
-| Alert type | What happened |
+| What your partner sees | What it means |
 |---|---|
-| `monitoring_disabled` | Screenshot monitoring was turned off |
-| `interval_tampered` | Screenshot intervals were set unreasonably high |
-| `timer_tampered` | Heartbeat, upload, or tamper-check timers were increased beyond safe limits |
-| `matrix_cleared` | All Matrix connection settings were deleted |
-| `matrix_incomplete` | Some Matrix settings were deleted (breaks the connection) |
-| `partner_changed` | The partner Matrix ID was changed or cleared |
-| `e2ee_disabled` | Encryption keys were cleared |
-| `autostart_missing` | The autostart entry was deleted |
-| `autostart_modified` | The autostart entry was changed to point elsewhere |
-| `autostart_unreadable` | The autostart entry exists but cannot be read |
-| `systemd_disabled` | The system service was disabled |
-| `settings_unlocked` | The settings lock was bypassed |
-| `unlock_code_cleared` | The unlock code was erased while settings are locked |
-| `binary_missing` | The Vigil daemon binary was deleted |
-| `binary_modified` | The Vigil program file was replaced |
-| `binary_unreadable` | The Vigil daemon binary cannot be read |
-| `capture_stalled` | No screenshot captured within the expected interval (backend may have failed silently) |
-| `orphan_screenshots` | Many screenshots have no pending marker (markers may have been deleted to suppress upload) |
-| `disk_space_low` | Less than 50 MB disk space remaining; screenshots cannot be stored |
-| `screenshot_tampered` | A screenshot file was modified after capture (integrity hash mismatch) |
-| `capture_counter_tampered` | The lifetime capture counter file was modified (HMAC mismatch) |
-| `e2ee_init_failed` | Encryption failed to start -- screenshots are queued locally until E2EE recovers |
-| `background_permission_revoked` | Background running/autostart permission was revoked |
-| `ld_preload_detected` | LD_PRELOAD environment variable is set (possible library injection) |
-| `prctl_failed` | Failed to disable process core dumps/ptrace (process hardening failed) |
-| `screenshot_deleted` | A screenshot file was unexpectedly deleted (not by the daemon) |
-| `marker_deleted` | A pending upload marker was unexpectedly deleted (not by the daemon) |
-| `crypto_file_tampered` | A file in the crypto directory was deleted |
-| `unmonitored_gap` | Device was unmonitored for longer than expected (sleep, suspend, or attack) |
-| `dumpable_reactivated` | Process dumpable flag was re-enabled (possible ptrace/memory attack) |
-| `display_service_gone` | The screenshot compositor process disappeared |
-| `display_service_replaced` | The screenshot compositor was replaced with a different binary |
+| Screenshot monitoring was turned off | Someone disabled the monitoring feature |
+| Screenshot timing was changed to take very few screenshots | Monitoring coverage was reduced |
+| All connection settings were deleted | Vigil can no longer send messages or screenshots |
+| Your partner ID was changed or removed | Messages may no longer reach your partner |
+| Encryption keys were deleted | Screenshots cannot be sent securely |
+| Vigil's autostart was removed | Vigil won't start after reboot |
+| Vigil's background service was disabled | Vigil may not restart if stopped |
+| The settings lock was bypassed | Someone changed settings without the unlock code |
+| The Vigil program file was deleted | Someone may be uninstalling Vigil |
+| The Vigil program file was replaced or modified | The program may have been tampered with |
+| No screenshot was taken when expected | The screenshot system may have stopped working |
+| A screenshot was modified after it was taken | Someone may have edited a screenshot before it was sent |
+| A screenshot was unexpectedly deleted | A screenshot was removed before it could be sent |
+| Encryption failed to start | Screenshots are saved locally until encryption recovers |
+| Permission to run in the background was revoked | Vigil may stop when the window is closed |
+| The screenshot service was replaced | Screenshots may not be genuine |
+| A security protection was disabled | Someone may be trying to inspect Vigil's memory |
+
+The next heartbeat will also include any warnings that occurred since the last update, so nothing is missed even if an individual warning fails to send.
 
 ### Forced kill or uninstall
 
-If Vigil is killed with `kill -9`, the power is pulled, or it's uninstalled entirely, there is no opportunity to send a message. This is exactly what the dead man's switch handles: the "next check-in by" deadline passes with no message, and your partner knows something is wrong.
+If Vigil is killed with `kill -9`, the power is pulled, or it's uninstalled entirely, there is no opportunity to send a message. This is exactly what the deadline handles: the "if no new message arrives within 30 minutes" deadline passes with no message, and your partner knows something is wrong.
 
 ### What your partner needs to remember
 
-1. **Regular messages arriving on time** = everything is fine
-2. **"Going offline (clean shutdown)"** = computer was turned off normally, expect silence
-3. **"Resumed after Xm gap"** = computer was asleep or offline, now back
-4. **"TAMPER ALERT"** = something suspicious, investigate
+1. **"STATUS: All clear"** = everything is fine
+2. **"NOTICE: Going offline"** = computer was turned off normally, expect silence
+3. **"NOTICE: Back online after…"** = computer was off or asleep, check if a "Going offline" message was sent before
+4. **"WARNING:"** = something suspicious, investigate
 5. **Deadline passes with no message at all** = most serious; Vigil was forcibly stopped
 
 ## Security and encryption
