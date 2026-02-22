@@ -12,6 +12,9 @@ finish-args:
   - '--talk-name=org.freedesktop.portal.Desktop'
   - '--talk-name=org.gnome.Shell.Screenshot'
   - '--system-talk-name=org.freedesktop.login1'
+  - '--talk-name=ca.desrt.dconf'
+  - '--filesystem=xdg-config/dconf:rw'
+  - '--env=DCONF_USER_CONFIG_DIR=.config/dconf'
 
 modules:
   - name: libolm
