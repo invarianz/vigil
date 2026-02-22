@@ -25,6 +25,7 @@ public class Vigil.MonitoringEngine : Object {
     private bool _room_keys_shared = false;
     private int _consecutive_upload_failures = 0;
     private const int UPLOAD_FAILURE_THRESHOLD = 3;
+    private int64 _start_monotonic;
 
     /* Properties */
 
@@ -89,6 +90,7 @@ public class Vigil.MonitoringEngine : Object {
         _matrix_svc = matrix_svc;
         _settings = settings;
         _recent_tamper_events = new Queue<string> ();
+        _start_monotonic = GLib.get_monotonic_time ();
 
         connect_signals ();
     }
@@ -154,6 +156,15 @@ public class Vigil.MonitoringEngine : Object {
                 DBusSignalFlags.NONE,
                 on_prepare_for_shutdown
             );
+            system_bus.signal_subscribe (
+                "org.freedesktop.login1",
+                "org.freedesktop.login1.Manager",
+                "PrepareForSleep",
+                "/org/freedesktop/login1",
+                null,
+                DBusSignalFlags.NONE,
+                on_prepare_for_sleep
+            );
         } catch (Error e) {
             debug ("Could not subscribe to login1 signals: %s", e.message);
         }
@@ -195,6 +206,11 @@ public class Vigil.MonitoringEngine : Object {
         yield request_background_portal ();
         schedule_background_portal_check ();
 
+        // Send "Vigil is online" notice if monitoring is active on startup
+        if (monitoring_active) {
+            send_online_notice ();
+        }
+
         // Notify UI that initialization is complete (backend name, etc.)
         status_changed ();
     }
@@ -218,7 +234,75 @@ public class Vigil.MonitoringEngine : Object {
         parameters.get ("(b)", out active);
         if (active) {
             system_shutdown_pending = true;
+            send_shutdown_notice ();
         }
+    }
+
+    private void on_prepare_for_sleep (DBusConnection conn, string? sender,
+        string object_path, string interface_name, string signal_name,
+        Variant parameters) {
+        bool active;
+        parameters.get ("(b)", out active);
+        if (active) {
+            send_sleep_notice ();
+        } else {
+            send_online_notice ("Computer resumed from sleep.");
+        }
+    }
+
+    private void send_sleep_notice () {
+        if (_matrix_svc == null || !_matrix_svc.is_configured) {
+            return;
+        }
+
+        var uptime_sec = (GLib.get_monotonic_time () - _start_monotonic) / 1000000;
+        var uptime_str = Vigil.Services.TamperDetectionService.format_duration (uptime_sec);
+        var text = "Going to sleep — computer is entering sleep/hibernate.\n" +
+            "Vigil will resume when the computer wakes up.\n" +
+            "Was running for %s.".printf (uptime_str);
+
+        var loop = new MainLoop (null, false);
+        _matrix_svc.send_notice.begin (text, "#28a745", (obj, res) => {
+            _matrix_svc.send_notice.end (res);
+            loop.quit ();
+        });
+        Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });
+        loop.run ();
+    }
+
+    private void send_online_notice (string reason = "Vigil started.") {
+        if (_matrix_svc == null || !_matrix_svc.is_configured) {
+            return;
+        }
+
+        var text = "Vigil is online — %s".printf (reason);
+
+        _matrix_svc.send_notice.begin (text, "#28a745");
+    }
+
+    /**
+     * Send the "going offline" notice immediately when PrepareForShutdown
+     * arrives, while the network is still up. By the time shutdown() runs,
+     * systemd may have already torn down the network stack.
+     */
+    private void send_shutdown_notice () {
+        if (_matrix_svc == null || !_matrix_svc.is_configured) {
+            return;
+        }
+
+        var uptime_sec = (GLib.get_monotonic_time () - _start_monotonic) / 1000000;
+        var uptime_str = Vigil.Services.TamperDetectionService.format_duration (uptime_sec);
+        var text = "Going offline — computer is shutting down.\n" +
+            "Vigil will start again automatically.\n" +
+            "Was running for %s.".printf (uptime_str);
+
+        var loop = new MainLoop (null, false);
+        _matrix_svc.send_notice.begin (text, "#28a745", (obj, res) => {
+            _matrix_svc.send_notice.end (res);
+            loop.quit ();
+        });
+        Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });
+        loop.run ();
     }
 
     private void connect_signals () {
@@ -255,6 +339,7 @@ public class Vigil.MonitoringEngine : Object {
             bool enabled = _settings.get_boolean ("monitoring-enabled");
             if (enabled && !monitoring_active) {
                 start_monitoring ();
+                send_online_notice ("Monitoring enabled.");
             } else if (!enabled && monitoring_active) {
                 stop_monitoring ();
             }

@@ -187,54 +187,39 @@ public class Vigil.Application : Gtk.Application {
     protected override void shutdown () {
         bool system_shutdown = _engine != null && _engine.system_shutdown_pending;
 
-        // If this is NOT a system shutdown, report tamper or warning
-        if (!system_shutdown && _tamper_svc != null && _matrix_svc != null) {
+        // If this is NOT a system shutdown, send alert directly (synchronous,
+        // no fire-and-forget to avoid duplicate delivery)
+        if (!system_shutdown && _matrix_svc != null && _matrix_svc.is_configured) {
             bool locked = _settings != null &&
                 _settings.get_boolean ("settings-locked");
-            if (locked) {
-                _tamper_svc.report_tamper ("process_stopped",
-                    "Vigil was stopped without a system shutdown");
-            } else {
-                _tamper_svc.report_warning ("process_stopped",
-                    "Vigil was stopped without a system shutdown");
-            }
+            string event_type = locked ? "process_stopped" : "~process_stopped";
 
-            // Flush the alert just persisted by report_tamper/report_warning
-            if (_matrix_svc.is_configured) {
-                var alert_loop = new MainLoop (null, false);
-                _tamper_svc.flush_unsent_alerts.begin ((obj, res) => {
-                    _tamper_svc.flush_unsent_alerts.end (res);
+            var alert_loop = new MainLoop (null, false);
+            _matrix_svc.send_alert.begin (event_type,
+                "Vigil was stopped without a system shutdown",
+                (obj, res) => {
+                    _matrix_svc.send_alert.end (res);
                     alert_loop.quit ();
                 });
-                Timeout.add_seconds (3, () => {
-                    alert_loop.quit ();
-                    return Source.REMOVE;
-                });
-                alert_loop.run ();
-            }
+            Timeout.add_seconds (3, () => {
+                alert_loop.quit ();
+                return Source.REMOVE;
+            });
+            alert_loop.run ();
         }
 
-        // Send "going offline" notice so the partner knows silence is expected
-        if (_matrix_svc != null && _matrix_svc.is_configured) {
+        // Send "going offline" notice in orange (system shutdowns already
+        // sent theirs in on_prepare_for_shutdown while network was still up)
+        if (!system_shutdown && _matrix_svc != null && _matrix_svc.is_configured) {
             var now = new DateTime.now_local ();
             var uptime = now.difference (_start_time) / TimeSpan.SECOND;
-
-            var sb = new StringBuilder ();
-            sb.append ("NOTICE: Going offline\n\n");
-
-            if (system_shutdown) {
-                sb.append ("The computer is shutting down or restarting. This is normal.\n");
-                sb.append ("Vigil will start again automatically when the computer turns back on.\n\n");
-            } else {
-                sb.append ("Vigil was stopped manually (not a system shutdown or restart).\n\n");
-            }
-
-            sb.append_printf ("Was running for %s.",
-                Vigil.Services.TamperDetectionService.format_duration (uptime));
+            var text = "Going offline — Vigil was stopped manually.\n" +
+                "Was running for %s.".printf (
+                    Vigil.Services.TamperDetectionService.format_duration (uptime));
 
             var loop = new MainLoop (null, false);
-            _matrix_svc.send_text_message.begin (sb.str, (obj, res) => {
-                _matrix_svc.send_text_message.end (res);
+            _matrix_svc.send_notice.begin (text, "#fd7e14", (obj, res) => {
+                _matrix_svc.send_notice.end (res);
                 loop.quit ();
             });
             Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });

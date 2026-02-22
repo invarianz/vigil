@@ -1057,6 +1057,17 @@ public class Vigil.Services.MatrixTransportService : Object {
     }
 
     /**
+     * Send a colored notice to the Matrix room.
+     * color should be a CSS color string (e.g. "#28a745" for green).
+     */
+    public async bool send_notice (string text, string color) {
+        var plain = "\u2139 %s".printf (text);
+        var escaped = Markup.escape_text (text);
+        var html = "<font color=\"%s\">\u2139 %s</font>".printf (color, escaped);
+        return yield send_html_message (plain, html);
+    }
+
+    /**
      * Verify the Matrix connection by calling the /whoami endpoint.
      */
     public async string? verify_connection () {

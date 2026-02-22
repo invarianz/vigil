@@ -454,10 +454,11 @@ public class Vigil.Widgets.SettingsView : Gtk.Box {
         settings.set_boolean ("settings-locked", true);
 
         // Notify the partner that settings are locked (code NOT included)
-        yield _matrix_svc.send_text_message (
+        yield _matrix_svc.send_notice (
             "Settings are now locked. The unlock code has been shared " +
-            "with the user directly -- please ask them for it " +
-            "(in person, phone, or another chat)."
+            "with the user directly — please ask them for it " +
+            "(in person, phone, or another chat).",
+            "#28a745"
         );
 
         update_lock_ui ();
