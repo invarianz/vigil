@@ -423,7 +423,7 @@ public class Vigil.MonitoringEngine : Object {
             if (free_bytes < 50 * 1024 * 1024) {
                 var free_mb = (int64) (free_bytes / (1024 * 1024));
                 _tamper_svc.report_warning ("disk_space_low",
-                    "Less than 50 MB disk space remaining (%lld MB free), ".printf (free_mb) +
+                    "Less than 50 MB disk space remaining (%s MB free), ".printf (free_mb.to_string ()) +
                     "screenshots cannot be stored");
                 return;
             }
@@ -451,7 +451,6 @@ public class Vigil.MonitoringEngine : Object {
                 warning ("Failed to mark screenshot as pending: %s", e.message);
             }
 
-    
             status_changed ();
             _storage_svc.cleanup_old_screenshots ();
 
@@ -495,7 +494,6 @@ public class Vigil.MonitoringEngine : Object {
                 (owned) file_data, file_path, now);
             if (delivered) {
                 _storage_svc.mark_uploaded (file_path);
-        
 
                 // Flush any persisted unsent alerts after successful upload
                 yield _tamper_svc.flush_unsent_alerts ();

@@ -195,17 +195,13 @@ public class Vigil.Application : Gtk.Application {
                     "Vigil was stopped without a system shutdown");
             }
 
-            // Send the immediate tamper/warning alert
+            // Flush the alert just persisted by report_tamper/report_warning
             if (_matrix_svc.is_configured) {
                 var alert_loop = new MainLoop (null, false);
-                _matrix_svc.send_alert.begin (
-                    "process_stopped",
-                    "Vigil was stopped without a system shutdown",
-                    (obj, res) => {
-                        _matrix_svc.send_alert.end (res);
-                        alert_loop.quit ();
-                    }
-                );
+                _tamper_svc.flush_unsent_alerts.begin ((obj, res) => {
+                    _tamper_svc.flush_unsent_alerts.end (res);
+                    alert_loop.quit ();
+                });
                 Timeout.add_seconds (3, () => {
                     alert_loop.quit ();
                     return Source.REMOVE;

@@ -176,8 +176,8 @@ public class Vigil.Services.TamperDetectionService : Object {
 
         if (elapsed_sec > threshold) {
             emit_warning ("capture_stalled",
-                "No screenshot captured in %lld seconds (expected every %d seconds)".printf (
-                    elapsed_sec, max_capture_interval_seconds));
+                "No screenshot captured in %s seconds (expected every %d seconds)".printf (
+                    elapsed_sec.to_string (), max_capture_interval_seconds));
         }
     }
 
@@ -586,18 +586,12 @@ public class Vigil.Services.TamperDetectionService : Object {
      * Handle a file monitor event. Fires tamper events for unexpected changes.
      */
     private void handle_monitor_event (File file, FileMonitorEvent event, string category) {
-        if (event != FileMonitorEvent.DELETED &&
-            event != FileMonitorEvent.CHANGED) {
+        if (event != FileMonitorEvent.DELETED) {
             return;
         }
 
         var path = file.get_path ();
         if (path == null) {
-            return;
-        }
-
-        // Only care about deletions for screenshots and markers
-        if (event != FileMonitorEvent.DELETED) {
             return;
         }
 
@@ -627,7 +621,11 @@ public class Vigil.Services.TamperDetectionService : Object {
         tamper_detected (event_type, details);
 
         if (_matrix_svc != null && _matrix_svc.is_configured) {
-            _matrix_svc.send_alert.begin (event_type, details);
+            _matrix_svc.send_alert.begin (event_type, details, (obj, res) => {
+                if (_matrix_svc.send_alert.end (res)) {
+                    remove_unsent_alert (event_str);
+                }
+            });
         }
     }
 
@@ -639,7 +637,21 @@ public class Vigil.Services.TamperDetectionService : Object {
         tamper_detected ("~" + event_type, details);
 
         if (_matrix_svc != null && _matrix_svc.is_configured) {
-            _matrix_svc.send_alert.begin ("~" + event_type, details);
+            _matrix_svc.send_alert.begin ("~" + event_type, details, (obj, res) => {
+                if (_matrix_svc.send_alert.end (res)) {
+                    remove_unsent_alert (event_str);
+                }
+            });
+        }
+    }
+
+    private void remove_unsent_alert (string event_str) {
+        for (uint i = 0; i < _unsent_alerts.length; i++) {
+            if (_unsent_alerts[i] == event_str) {
+                _unsent_alerts.remove_index (i);
+                persist_unsent_alerts ();
+                return;
+            }
         }
     }
 
@@ -901,16 +913,16 @@ public class Vigil.Services.TamperDetectionService : Object {
             return "less than a minute";
         }
         if (hours == 0) {
-            return "%lld %s".printf (
-                minutes, minutes == 1 ? "minute" : "minutes");
+            return "%s %s".printf (
+                minutes.to_string (), minutes == 1 ? "minute" : "minutes");
         }
         if (minutes == 0) {
-            return "%lld %s".printf (
-                hours, hours == 1 ? "hour" : "hours");
+            return "%s %s".printf (
+                hours.to_string (), hours == 1 ? "hour" : "hours");
         }
-        return "%lld %s %lld %s".printf (
-            hours, hours == 1 ? "hour" : "hours",
-            minutes, minutes == 1 ? "minute" : "minutes");
+        return "%s %s %s %s".printf (
+            hours.to_string (), hours == 1 ? "hour" : "hours",
+            minutes.to_string (), minutes == 1 ? "minute" : "minutes");
     }
 
     private void schedule_next () {
