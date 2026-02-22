@@ -64,21 +64,92 @@ public class Vigil.Application : Gtk.Application {
     }
 
     private async void connect_to_daemon () {
+        // Try connecting to an already-running daemon
+        daemon_proxy = yield try_dbus_connect ();
+        if (daemon_proxy != null) {
+            debug ("Connected to Vigil daemon over D-Bus");
+            update_window_proxy ();
+            return;
+        }
+
+        // Daemon not running — spawn it
+        if (!try_spawn_daemon ()) {
+            warning ("Could not connect to or spawn Vigil daemon");
+            return;
+        }
+
+        // Retry connection while daemon starts up and registers on D-Bus
+        for (int i = 0; i < 4; i++) {
+            yield async_delay (500 + i * 500);
+            daemon_proxy = yield try_dbus_connect ();
+            if (daemon_proxy != null) {
+                debug ("Connected to Vigil daemon over D-Bus (after spawn)");
+                update_window_proxy ();
+                return;
+            }
+        }
+
+        warning ("Daemon spawned but D-Bus registration timed out");
+    }
+
+    private async Vigil.Daemon.IDaemonBus? try_dbus_connect () {
         try {
-            daemon_proxy = yield Bus.get_proxy<Vigil.Daemon.IDaemonBus> (
+            return yield Bus.get_proxy<Vigil.Daemon.IDaemonBus> (
                 BusType.SESSION,
                 "io.github.invarianz.vigil.Daemon",
                 "/io/github/invarianz/vigil/Daemon"
             );
-            debug ("Connected to Vigil daemon over D-Bus");
-
-            // If a window is already showing, update it
-            if (active_window != null) {
-                ((Vigil.MainWindow) active_window).set_daemon_proxy (daemon_proxy);
-            }
         } catch (Error e) {
-            warning ("Could not connect to Vigil daemon: %s. Is the daemon running?", e.message);
+            debug ("D-Bus connect attempt: %s", e.message);
+            return null;
         }
+    }
+
+    /**
+     * Spawn the daemon binary from the same directory as the GUI binary.
+     * Works for both Flatpak (/app/bin/) and development (builddir/).
+     */
+    private bool try_spawn_daemon () {
+        try {
+            var gui_path = FileUtils.read_link ("/proc/self/exe");
+            var daemon_path = Path.build_filename (
+                Path.get_dirname (gui_path),
+                Vigil.Config.APP_ID + ".daemon"
+            );
+
+            if (!FileUtils.test (daemon_path, FileTest.IS_EXECUTABLE)) {
+                warning ("Daemon binary not found at %s", daemon_path);
+                return false;
+            }
+
+            debug ("Spawning daemon: %s", daemon_path);
+            Process.spawn_async (
+                null,
+                { daemon_path },
+                null,
+                SpawnFlags.DO_NOT_REAP_CHILD,
+                null,
+                null
+            );
+            return true;
+        } catch (Error e) {
+            warning ("Failed to spawn daemon: %s", e.message);
+            return false;
+        }
+    }
+
+    private void update_window_proxy () {
+        if (active_window != null) {
+            ((Vigil.MainWindow) active_window).set_daemon_proxy (daemon_proxy);
+        }
+    }
+
+    private async void async_delay (uint ms) {
+        Timeout.add (ms, () => {
+            async_delay.callback ();
+            return Source.REMOVE;
+        });
+        yield;
     }
 
     public static int main (string[] args) {
