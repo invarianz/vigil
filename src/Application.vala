@@ -75,6 +75,10 @@ public class Vigil.Application : Gtk.Application {
         add_action (quit_action);
         set_accels_for_action ("app.quit", { "<Control>q" });
 
+        // Handle SIGTERM/SIGINT gracefully so shutdown() runs
+        Unix.signal_add (ProcessSignal.TERM, () => { quit (); return Source.REMOVE; });
+        Unix.signal_add (ProcessSignal.INT, () => { quit (); return Source.REMOVE; });
+
         // Keep process alive when window is closed
         hold ();
 
@@ -222,8 +226,7 @@ public class Vigil.Application : Gtk.Application {
                 sb.append ("The computer is shutting down or restarting. This is normal.\n");
                 sb.append ("Vigil will start again automatically when the computer turns back on.\n\n");
             } else {
-                sb.append ("Vigil was stopped manually (not a system shutdown or restart).\n");
-                sb.append ("If you did not authorize this, investigate immediately.\n\n");
+                sb.append ("Vigil was stopped manually (not a system shutdown or restart).\n\n");
             }
 
             sb.append_printf ("Was running for %s.",

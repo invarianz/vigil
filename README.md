@@ -111,8 +111,6 @@ Vigil distinguishes two severity levels. **Tamper attempts** (bold red) indicate
 Alerts are sent immediately -- they don't wait for the next heartbeat:
 
 > **TAMPER ATTEMPT:** The settings lock was bypassed. Someone may have unlocked settings via dconf instead of the GUI.
->
-> *If you did not authorize this change, please investigate.*
 
 Warnings look different:
 

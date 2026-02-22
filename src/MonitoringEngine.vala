@@ -23,6 +23,8 @@ public class Vigil.MonitoringEngine : Object {
     private uint _background_portal_source = 0;
     private uint _key_sharing_source = 0;
     private bool _room_keys_shared = false;
+    private int _consecutive_upload_failures = 0;
+    private const int UPLOAD_FAILURE_THRESHOLD = 3;
 
     /* Properties */
 
@@ -494,10 +496,17 @@ public class Vigil.MonitoringEngine : Object {
                 (owned) file_data, file_path, now);
             if (delivered) {
                 _storage_svc.mark_uploaded (file_path);
+                _consecutive_upload_failures = 0;
 
                 // Flush any persisted unsent alerts after successful upload
                 yield _tamper_svc.flush_unsent_alerts ();
             } else {
+                _consecutive_upload_failures++;
+                if (_consecutive_upload_failures == UPLOAD_FAILURE_THRESHOLD) {
+                    _tamper_svc.report_warning ("connection_lost",
+                        "%d consecutive screenshot uploads failed — possible network outage".printf (
+                            UPLOAD_FAILURE_THRESHOLD));
+                }
                 // Upload failed — schedule a retry for all pending
                 schedule_pending_retry ();
             }

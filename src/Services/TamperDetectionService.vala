@@ -614,8 +614,11 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     private void emit_tamper (string event_type, string details) {
-        debug ("Tamper detected [%s]: %s", event_type, details);
         var event_str = "%s: %s".printf (event_type, details);
+        if (has_unsent_alert (event_str)) {
+            return;
+        }
+        debug ("Tamper detected [%s]: %s", event_type, details);
         _unsent_alerts.add (event_str);
         persist_unsent_alerts ();
         tamper_detected (event_type, details);
@@ -630,8 +633,11 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     private void emit_warning (string event_type, string details) {
-        debug ("Warning [%s]: %s", event_type, details);
         var event_str = "~%s: %s".printf (event_type, details);
+        if (has_unsent_alert (event_str)) {
+            return;
+        }
+        debug ("Warning [%s]: %s", event_type, details);
         _unsent_alerts.add (event_str);
         persist_unsent_alerts ();
         tamper_detected ("~" + event_type, details);
@@ -643,6 +649,15 @@ public class Vigil.Services.TamperDetectionService : Object {
                 }
             });
         }
+    }
+
+    private bool has_unsent_alert (string event_str) {
+        for (uint i = 0; i < _unsent_alerts.length; i++) {
+            if (_unsent_alerts[i] == event_str) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void remove_unsent_alert (string event_str) {
@@ -864,6 +879,9 @@ public class Vigil.Services.TamperDetectionService : Object {
             case "disk_space_low":
                 return "The device is almost out of storage space. " +
                     "New screenshots cannot be saved.";
+            case "connection_lost":
+                return "Multiple screenshot uploads failed in a row. " +
+                    "The device may have lost its internet connection.";
             case "screenshot_tampered":
                 return "A screenshot was modified after it was taken. " +
                     "Someone edited it before it was sent to you.";

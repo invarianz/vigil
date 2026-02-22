@@ -795,8 +795,7 @@ public class Vigil.Services.MatrixTransportService : Object {
             return false;
         }
 
-        var time_str = capture_time.format ("%Y-%m-%d %H:%M:%S");
-        var body = "Screenshot %s".printf (time_str);
+        var body = capture_time.format ("%b %d, %H:%M");
         var filename = Path.get_basename (file_path);
 
         // Extract PNG dimensions for inline preview in Matrix clients
@@ -888,7 +887,7 @@ public class Vigil.Services.MatrixTransportService : Object {
         builder.set_member_name ("msgtype");
         builder.add_string_value ("m.image");
         builder.set_member_name ("body");
-        builder.add_string_value (filename);
+        builder.add_string_value (body);
         builder.set_member_name ("filename");
         builder.add_string_value (filename);
 
@@ -1017,10 +1016,8 @@ public class Vigil.Services.MatrixTransportService : Object {
             html = "<font color=\"#fd7e14\">\u26a0 Warning: %s</font>".printf (
                 Markup.escape_text (friendly));
         } else {
-            plain = "\xf0\x9f\x9a\xa8 TAMPER ATTEMPT: %s\n\nIf you did not authorize this change, please investigate."
-                .printf (friendly);
-            html = ("<b><font color=\"#dc3545\">\xf0\x9f\x9a\xa8 TAMPER ATTEMPT: %s</font></b>" +
-                "<br><br><em>If you did not authorize this change, please investigate.</em>")
+            plain = "\xf0\x9f\x9a\xa8 TAMPER ATTEMPT: %s".printf (friendly);
+            html = "<b><font color=\"#dc3545\">\xf0\x9f\x9a\xa8 TAMPER ATTEMPT: %s</font></b>"
                 .printf (Markup.escape_text (friendly));
         }
 
