@@ -88,8 +88,8 @@ public class Vigil.Services.MatrixTransportService : Object {
      */
     public string generate_txn_id () {
         _txn_counter++;
-        return "vigil_%lld_%s".printf (
-            _txn_counter,
+        return "vigil_%s_%s".printf (
+            _txn_counter.to_string (),
             GLib.Uuid.string_random ().substring (0, 8)
         );
     }

@@ -140,8 +140,8 @@ public class Vigil.Services.StorageService : Object {
                 file_data = preloaded_data;
                 if (file_data.length > SecurityUtils.MAX_SCREENSHOT_SIZE) {
                     throw new IOError.INVALID_ARGUMENT (
-                        "Screenshot exceeds maximum size (%lld bytes)".printf (
-                            SecurityUtils.MAX_SCREENSHOT_SIZE));
+                        "Screenshot exceeds maximum size (%s bytes)".printf (
+                            SecurityUtils.MAX_SCREENSHOT_SIZE.to_string ()));
                 }
             } else {
                 // Validate file size/type to prevent DoS from maliciously large files.
@@ -155,8 +155,8 @@ public class Vigil.Services.StorageService : Object {
                 }
                 if (file_info.get_size () > SecurityUtils.MAX_SCREENSHOT_SIZE) {
                     throw new IOError.INVALID_ARGUMENT (
-                        "Screenshot exceeds maximum size (%lld bytes)".printf (
-                            SecurityUtils.MAX_SCREENSHOT_SIZE));
+                        "Screenshot exceeds maximum size (%s bytes)".printf (
+                            SecurityUtils.MAX_SCREENSHOT_SIZE.to_string ()));
                 }
                 FileUtils.get_data (screenshot_path, out file_data);
             }
