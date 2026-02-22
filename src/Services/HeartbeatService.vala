@@ -598,14 +598,6 @@ public class Vigil.Services.HeartbeatService : Object {
                 return "Vigil is running outside its Flatpak sandbox. " +
                     "All security protections are bypassed \u2014 " +
                     "screenshots and encryption cannot be trusted.";
-            case "flatpak_override_detected":
-                return "Vigil\u2019s Flatpak permissions have been " +
-                    "modified. The sandbox may be weakened, allowing " +
-                    "tampering that would otherwise be blocked.";
-            case "display_service_gone":
-                return "The screenshot service has stopped running. " +
-                    "Screenshots are NOT being taken \u2014 activity " +
-                    "is going unmonitored.";
             default:
                 return raw_event;
         }

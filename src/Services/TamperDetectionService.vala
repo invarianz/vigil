@@ -32,7 +32,7 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Path to the pending markers directory (for orphan detection). */
     public string pending_dir { get; set; default = ""; }
 
-    /** Path to the crypto directory (for file monitoring). Empty = auto-detect. */
+    /** Path to the crypto directory (for periodic existence checking). */
     public string crypto_dir { get; set; default = ""; }
 
     /** Maximum capture interval in seconds (for liveness monitoring). */
@@ -68,6 +68,9 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Cached config hash (invalidated on settings change). */
     private string? _cached_config_hash = null;
 
+    /** Crypto files seen on disk (for periodic existence checking). */
+    private GenericSet<string> _crypto_files_seen;
+
     /**
      * Create a TamperDetectionService.
      *
@@ -77,6 +80,7 @@ public class Vigil.Services.TamperDetectionService : Object {
     public TamperDetectionService (GLib.Settings? settings = null) {
         _settings = settings;
         _expected_deletions = new GenericSet<string> (str_hash, str_equal);
+        _crypto_files_seen = new GenericSet<string> (str_hash, str_equal);
         _monitors = new GenericArray<FileMonitor> ();
 
         if (_settings != null) {
@@ -123,8 +127,7 @@ public class Vigil.Services.TamperDetectionService : Object {
     public void run_all_checks () {
         check_settings_sanity ();
         check_flatpak_sandbox ();
-        check_flatpak_overrides ();
-        check_display_service ();
+        check_crypto_files ();
         check_capture_liveness ();
         check_orphan_screenshots ();
     }
@@ -475,10 +478,9 @@ public class Vigil.Services.TamperDetectionService : Object {
             watch_directory (pending_dir, "marker");
         }
 
-        // Note: the crypto directory is NOT monitored via inotify because
-        // GLib's atomic file writes (used by write_secure_file) create
-        // temp files that trigger spurious DELETE events on every pickle
-        // save. Crypto integrity is verified via periodic checks instead.
+        // Note: crypto directory is NOT monitored via inotify because
+        // GLib's atomic writes cause spurious DELETE events. Crypto file
+        // existence is checked periodically by check_crypto_files() instead.
     }
 
     /**
@@ -506,15 +508,6 @@ public class Vigil.Services.TamperDetectionService : Object {
         emit_tamper (event_type, details);
     }
 
-    /** PID of the display service (Portal). 0 = unconfigured. */
-    public uint32 display_service_pid { get; set; default = 0; }
-
-    /** D-Bus name of the display service (for diagnostics). */
-    public string display_service_name { get; set; default = ""; }
-
-    /** Path to the Flatpak overrides file (overridable for tests). */
-    public string flatpak_overrides_path { get; set; default = ""; }
-
     /**
      * Check that the Flatpak sandbox is intact.
      *
@@ -529,52 +522,37 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     /**
-     * Check for Flatpak permission overrides.
+     * Check that critical crypto files still exist on disk.
      *
-     * A user can run `flatpak override --user` to grant extra permissions
-     * (filesystem access, environment variables, etc.) that weaken the
-     * sandbox. Any override file for this app is suspicious.
+     * These files are essential for E2EE operation. If they are deleted
+     * while the daemon is running, encryption will break on next restart.
+     * Inotify is not used because GLib's atomic writes (create temp, rename)
+     * cause spurious DELETE events on every pickle save.
      */
-    public void check_flatpak_overrides () {
-        var path = flatpak_overrides_path;
-        if (path == "") {
-            path = Path.build_filename (
-                Environment.get_home_dir (),
-                ".local", "share", "flatpak", "overrides",
-                "io.github.invarianz.vigil"
-            );
-        }
+    public void check_crypto_files () {
+        var crypto_path = crypto_dir != ""
+            ? crypto_dir
+            : Path.build_filename (SecurityUtils.get_app_data_dir (), "crypto");
 
-        if (FileUtils.test (path, FileTest.EXISTS)) {
-            try {
-                string contents;
-                FileUtils.get_contents (path, out contents);
-                emit_tamper ("flatpak_override_detected",
-                    "Flatpak permission overrides are active (sandbox may be weakened)");
-            } catch (Error e) {
-                emit_tamper ("flatpak_override_detected",
-                    "Flatpak overrides file exists but could not be read");
-            }
-        }
-    }
-
-    /**
-     * Check that the display service (Portal) is still running.
-     *
-     * Inside Flatpak, /proc/<pid>/exe cannot be read for host PIDs
-     * (different PID namespace), so only PID existence is checked.
-     */
-    public void check_display_service () {
-        if (display_service_pid == 0) {
+        if (!FileUtils.test (crypto_path, FileTest.IS_DIR)) {
             return;
         }
 
-        var proc_dir = "/proc/%u".printf (display_service_pid);
-        if (!FileUtils.test (proc_dir, FileTest.IS_DIR)) {
-            emit_warning ("display_service_gone",
-                "Display service %s (PID %u) is no longer running".printf (
-                    display_service_name, display_service_pid));
-            display_service_pid = 0;
+        string[] critical_files = {
+            "account.pickle", "megolm_outbound.pickle",
+            "pickle_key", "access_token"
+        };
+
+        foreach (var filename in critical_files) {
+            var path = Path.build_filename (crypto_path, filename);
+            if (_crypto_files_seen.contains (filename) &&
+                !FileUtils.test (path, FileTest.EXISTS)) {
+                emit_tamper ("crypto_file_tampered",
+                    "Crypto file %s was deleted".printf (filename));
+                _crypto_files_seen.remove (filename);
+            } else if (FileUtils.test (path, FileTest.EXISTS)) {
+                _crypto_files_seen.add (filename);
+            }
         }
     }
 
@@ -633,25 +611,7 @@ public class Vigil.Services.TamperDetectionService : Object {
             return;
         }
 
-        // Crypto directory: only alert on deletion of KNOWN crypto files.
-        // GLib's atomic writes create temp files (e.g. "account.pickle.Q5OUK3")
-        // that get renamed -- the temp file deletion triggers inotify. Ignore
-        // these by only matching exact known filenames.
-        if (category == "crypto") {
-            if (event == FileMonitorEvent.DELETED) {
-                var basename = Path.get_basename (path);
-                if (basename == "account.pickle" ||
-                    basename == "megolm_outbound.pickle" ||
-                    basename == "pickle_key" ||
-                    basename == "access_token") {
-                    emit_tamper ("crypto_file_tampered",
-                        "Crypto file %s was deleted".printf (basename));
-                }
-            }
-            return;
-        }
-
-        // For screenshots and markers, only care about deletions
+        // Only care about deletions for screenshots and markers
         if (event != FileMonitorEvent.DELETED) {
             return;
         }

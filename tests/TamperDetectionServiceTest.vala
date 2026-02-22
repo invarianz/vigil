@@ -771,8 +771,6 @@ void test_file_monitoring_expected_deletion () {
     DirUtils.create_with_parents (dir, 0755);
     var screenshots = Path.build_filename (dir, "screenshots");
     DirUtils.create_with_parents (screenshots, 0755);
-    var crypto = Path.build_filename (dir, "crypto");
-    DirUtils.create_with_parents (crypto, 0755);
 
     // Create a file to delete
     var file_path = Path.build_filename (screenshots, "test.png");
@@ -781,7 +779,6 @@ void test_file_monitoring_expected_deletion () {
     var svc = new Vigil.Services.TamperDetectionService (null);
     svc.screenshots_dir = screenshots;
     svc.pending_dir = Path.build_filename (dir, "pending");
-    svc.crypto_dir = crypto;
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
@@ -810,8 +807,6 @@ void test_file_monitoring_unexpected_deletion () {
     DirUtils.create_with_parents (dir, 0755);
     var screenshots = Path.build_filename (dir, "screenshots");
     DirUtils.create_with_parents (screenshots, 0755);
-    var crypto = Path.build_filename (dir, "crypto");
-    DirUtils.create_with_parents (crypto, 0755);
 
     // Create a file to delete unexpectedly
     var file_path = Path.build_filename (screenshots, "unexpected.png");
@@ -820,7 +815,6 @@ void test_file_monitoring_unexpected_deletion () {
     var svc = new Vigil.Services.TamperDetectionService (null);
     svc.screenshots_dir = screenshots;
     svc.pending_dir = Path.build_filename (dir, "pending");
-    svc.crypto_dir = crypto;
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
@@ -841,56 +835,12 @@ void test_file_monitoring_unexpected_deletion () {
     TestUtils.delete_directory_recursive (dir);
 }
 
-void test_display_service_no_alarm_unconfigured () {
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    // pid=0 means unconfigured (headless/CI)
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => { event_type = t; });
-
-    svc.check_display_service ();
-    assert_true (event_type == null);
-}
-
-void test_display_service_detects_gone_pid () {
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    // Use a PID that almost certainly doesn't exist
-    svc.display_service_pid = 4000000;
-    svc.display_service_name = "org.test.fake";
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => { event_type = t; });
-
-    svc.check_display_service ();
-    assert_true (event_type == "~display_service_gone");
-    // PID should be cleared after detection
-    assert_true (svc.display_service_pid == 0);
-}
-
-void test_display_service_valid_pid () {
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    // Use PID 1 (init/systemd) -- guaranteed to be running
-    // We can't easily read /proc/1/exe without root, so just test that
-    // a valid running PID does not fire display_service_gone.
-    svc.display_service_pid = 1;
-    svc.display_service_name = "org.test.self";
-    // Leave exe empty so the exe-changed check is skipped
-
-    string? event_type = null;
-    svc.tamper_detected.connect ((t, d) => { event_type = t; });
-
-    svc.check_display_service ();
-    assert_true (event_type == null);
-}
 
 void test_file_monitoring_stop_is_safe () {
     var dir = TestUtils.make_test_dir ();
     DirUtils.create_with_parents (dir, 0755);
-    var crypto = Path.build_filename (dir, "crypto");
-    DirUtils.create_with_parents (crypto, 0755);
 
     var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.crypto_dir = crypto;
 
     // Double start/stop should not crash
     svc.start_file_monitoring ();
@@ -901,38 +851,78 @@ void test_file_monitoring_stop_is_safe () {
     TestUtils.delete_directory_recursive (dir);
 }
 
-void test_flatpak_overrides_no_alarm_when_missing () {
+void test_crypto_files_detects_deletion () {
     var dir = TestUtils.make_test_dir ();
-    DirUtils.create_with_parents (dir, 0755);
+    var crypto = Path.build_filename (dir, "crypto");
+    DirUtils.create_with_parents (crypto, 0755);
+
+    // Create a crypto file that will be "seen" first
+    var pickle_path = Path.build_filename (crypto, "account.pickle");
+    try { FileUtils.set_contents (pickle_path, "fake"); } catch (Error e) { assert_not_reached (); }
 
     var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.flatpak_overrides_path = Path.build_filename (dir, "nonexistent");
+    svc.crypto_dir = crypto;
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
 
-    svc.check_flatpak_overrides ();
+    // First check: file is seen (registered)
+    svc.check_crypto_files ();
+    assert_true (event_type == null);
+
+    // Delete the file
+    FileUtils.remove (pickle_path);
+
+    // Second check: file is gone — tamper
+    svc.check_crypto_files ();
+    assert_true (event_type == "crypto_file_tampered");
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_crypto_files_no_alarm_before_seen () {
+    var dir = TestUtils.make_test_dir ();
+    var crypto = Path.build_filename (dir, "crypto");
+    DirUtils.create_with_parents (crypto, 0755);
+
+    // No files exist — should not fire (files not yet seen)
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.crypto_dir = crypto;
+
+    string? event_type = null;
+    svc.tamper_detected.connect ((t, d) => { event_type = t; });
+
+    svc.check_crypto_files ();
     assert_true (event_type == null);
 
     TestUtils.delete_directory_recursive (dir);
 }
 
-void test_flatpak_overrides_detects_override_file () {
+void test_crypto_files_no_alarm_when_present () {
     var dir = TestUtils.make_test_dir ();
-    DirUtils.create_with_parents (dir, 0755);
-    var override_file = Path.build_filename (dir, "io.github.invarianz.vigil");
-    try {
-        FileUtils.set_contents (override_file, "[Context]\nfilesystems=host;\n");
-    } catch (Error e) { assert_not_reached (); }
+    var crypto = Path.build_filename (dir, "crypto");
+    DirUtils.create_with_parents (crypto, 0755);
+
+    // Create all critical files
+    string[] files = { "account.pickle", "megolm_outbound.pickle", "pickle_key", "access_token" };
+    foreach (var f in files) {
+        var path = Path.build_filename (crypto, f);
+        try { FileUtils.set_contents (path, "fake"); } catch (Error e) { assert_not_reached (); }
+    }
 
     var svc = new Vigil.Services.TamperDetectionService (null);
-    svc.flatpak_overrides_path = override_file;
+    svc.crypto_dir = crypto;
 
     string? event_type = null;
     svc.tamper_detected.connect ((t, d) => { event_type = t; });
 
-    svc.check_flatpak_overrides ();
-    assert_true (event_type == "flatpak_override_detected");
+    // Register all files as seen
+    svc.check_crypto_files ();
+    assert_true (event_type == null);
+
+    // Check again with all files still present — no alarm
+    svc.check_crypto_files ();
+    assert_true (event_type == null);
 
     TestUtils.delete_directory_recursive (dir);
 }
@@ -1047,16 +1037,12 @@ public static int main (string[] args) {
         test_file_monitoring_unexpected_deletion);
     Test.add_func ("/tamper/file_monitoring_stop_is_safe",
         test_file_monitoring_stop_is_safe);
-    Test.add_func ("/tamper/display_service_no_alarm_unconfigured",
-        test_display_service_no_alarm_unconfigured);
-    Test.add_func ("/tamper/display_service_detects_gone_pid",
-        test_display_service_detects_gone_pid);
-    Test.add_func ("/tamper/display_service_valid_pid",
-        test_display_service_valid_pid);
-    Test.add_func ("/tamper/flatpak_overrides_no_alarm_when_missing",
-        test_flatpak_overrides_no_alarm_when_missing);
-    Test.add_func ("/tamper/flatpak_overrides_detects_override",
-        test_flatpak_overrides_detects_override_file);
+    Test.add_func ("/tamper/crypto_files_detects_deletion",
+        test_crypto_files_detects_deletion);
+    Test.add_func ("/tamper/crypto_files_no_alarm_before_seen",
+        test_crypto_files_no_alarm_before_seen);
+    Test.add_func ("/tamper/crypto_files_no_alarm_when_present",
+        test_crypto_files_no_alarm_when_present);
     Test.add_func ("/tamper/settings_exact_boundary_triggers",
         test_settings_exact_boundary_triggers_tamper);
     Test.add_func ("/tamper/warning_report_method",

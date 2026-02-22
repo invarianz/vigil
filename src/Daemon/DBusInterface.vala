@@ -219,9 +219,6 @@ public class Vigil.Daemon.DBusServer : Object {
 
         yield _screenshot_svc.initialize ();
 
-        // Record display service PID for tamper detection
-        yield record_display_service_pid ();
-
         apply_settings ();
         bind_settings ();
 
@@ -345,6 +342,7 @@ public class Vigil.Daemon.DBusServer : Object {
         // Wire up tamper detection: orphan check dirs & capture liveness threshold
         _tamper_svc.screenshots_dir = _storage_svc.screenshots_dir;
         _tamper_svc.pending_dir = _storage_svc.pending_dir;
+        _tamper_svc.crypto_dir = Vigil.Services.SecurityUtils.get_crypto_dir ();
         _tamper_svc.max_capture_interval_seconds = _settings.get_int ("max-interval-seconds");
         _tamper_svc.check_interval_seconds = _settings.get_int ("tamper-check-interval-seconds");
 
@@ -439,61 +437,6 @@ public class Vigil.Daemon.DBusServer : Object {
                 return Source.REMOVE;
             });
         }
-    }
-
-    /**
-     * Get the UNIX process ID of a D-Bus name owner.
-     *
-     * Calls org.freedesktop.DBus.GetConnectionUnixProcessID.
-     * Returns 0 if the name is not owned or the call fails.
-     */
-    private async uint32 get_dbus_name_pid (string bus_name) {
-        try {
-            var conn = GLib.Bus.get_sync (BusType.SESSION);
-            var result = yield conn.call (
-                "org.freedesktop.DBus",
-                "/org/freedesktop/DBus",
-                "org.freedesktop.DBus",
-                "GetConnectionUnixProcessID",
-                new Variant ("(s)", bus_name),
-                new VariantType ("(u)"),
-                DBusCallFlags.NONE,
-                5000,
-                null
-            );
-            uint32 pid;
-            result.get ("(u)", out pid);
-            return pid;
-        } catch (Error e) {
-            debug ("Could not get PID for %s: %s", bus_name, e.message);
-            return 0;
-        }
-    }
-
-    /**
-     * Record the display service PID for tamper detection.
-     *
-     * Looks up the D-Bus service backing the screenshot backend and
-     * records its PID and exe path so periodic checks can detect if
-     * it disappears or gets replaced.
-     */
-    private async void record_display_service_pid () {
-        var backend = _screenshot_svc.active_backend_name;
-        if (backend == null) {
-            return;
-        }
-
-        // Portal is the only backend (Flatpak-only app)
-        string bus_name = "org.freedesktop.portal.Desktop";
-
-        var pid = yield get_dbus_name_pid (bus_name);
-        if (pid == 0) {
-            return;
-        }
-
-        _tamper_svc.display_service_pid = pid;
-        _tamper_svc.display_service_name = bus_name;
-        debug ("Display service: %s PID=%u", bus_name, pid);
     }
 
     /**

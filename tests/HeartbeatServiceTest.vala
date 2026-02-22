@@ -382,8 +382,8 @@ void test_describe_tamper_event_known () {
     assert_true (result.contains ("settings lock was bypassed"));
 
     result = Vigil.Services.HeartbeatService.describe_tamper_event (
-        "flatpak_override_detected: overrides file exists");
-    assert_true (result.contains ("permissions"));
+        "crypto_file_tampered: Crypto file account.pickle was deleted");
+    assert_true (result.contains ("encryption file was deleted"));
 }
 
 void test_describe_tamper_event_unknown () {

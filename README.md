@@ -37,11 +37,11 @@ Your partner doesn't need any technical knowledge. They just watch for screensho
 - **Unpredictable timing** -- screenshots are taken at random intervals so they can't be anticipated
 - **End-to-end encrypted** -- screenshots are encrypted on your device before upload; the server never sees them
 - **One-click setup** -- enter your account details, click Setup, and Vigil handles login, room creation, and encryption automatically
-- **Tamper detection** -- alerts your partner if the daemon is stopped, settings are changed via dconf, the Flatpak sandbox is weakened, or files are modified. Distinguishes between **tamper attempts** (bold red) and **warnings** (orange) based on severity
+- **Tamper detection** -- alerts your partner if the daemon is stopped, settings are changed via dconf, or files are modified. Distinguishes between **tamper attempts** (bold red) and **warnings** (orange) based on severity
 - **Dead man's switch** -- heartbeat messages include a "next check-in by" deadline so your partner knows exactly when to expect the next update
 - **Offline resilience** -- queues screenshots for delivery when offline, retries on reconnect
 - **Settings lock** -- after setup, settings are locked behind a code that only your partner knows
-- **Flatpak sandboxed** -- runs inside a Flatpak sandbox with seccomp, separate PID/mount namespaces, and restricted filesystem access. Detects sandbox escapes and permission overrides
+- **Flatpak sandboxed** -- runs inside a Flatpak sandbox with seccomp, separate PID/mount namespaces, and restricted filesystem access. Detects sandbox escapes
 - **Persistent background service** -- keeps running even when the GUI is closed, restarts automatically via XDG Background portal autostart
 
 ## Getting started
@@ -176,7 +176,6 @@ Here are the types of problems Vigil can detect:
 | The capture counter was tampered with | Lifetime screenshot count was modified |
 | Encryption state files were tampered with | Crypto files were deleted on disk |
 | Vigil is running outside the sandbox | `/.flatpak-info` is missing -- sandbox was bypassed |
-| Flatpak permissions were modified | Override file detected -- sandbox may be weakened |
 | Many screenshots have no upload marker | Markers may have been systematically deleted |
 
 **Tamper if locked, warning if unlocked** (settings changes):
@@ -196,7 +195,6 @@ Here are the types of problems Vigil can detect:
 | Disk space is critically low | Less than 50 MB free |
 | Encryption failed to start | E2EE initialization error |
 | Permission to run in the background was revoked | XDG Background portal permission lost |
-| The screenshot service is no longer running | Display server / portal process exited |
 | Device was unmonitored for a period | Gap detected (sleep, shutdown, or outage) |
 | Settings unlocked with correct code | Authorized unlock via GUI (partner should verify they gave the code) |
 
