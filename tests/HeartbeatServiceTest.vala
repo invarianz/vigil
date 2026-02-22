@@ -13,13 +13,11 @@
 void test_build_heartbeat_message_basic () {
     var svc = new Vigil.Services.HeartbeatService ();
     svc.screenshots_since_last = 5;
-    svc.pending_upload_count = 2;
 
     var msg = svc.build_heartbeat_message ();
 
     assert_true (msg.contains ("STATUS: All clear"));
     assert_true (msg.contains ("Screenshots taken: 5"));
-    assert_true (msg.contains ("Waiting to send: 2"));
     assert_true (msg.contains ("arrives within"));
     assert_true (msg.contains ("something may be wrong"));
 }
@@ -170,17 +168,26 @@ void test_gap_detection_in_message () {
     assert_false (msg.contains ("Back online"));
 }
 
-void test_offline_notice_without_matrix () {
+void test_shutdown_notice_without_matrix () {
     var svc = new Vigil.Services.HeartbeatService ();
 
-    // Should not crash when Matrix is null
+    // Should not crash when Matrix is null (system shutdown)
     var loop = new MainLoop ();
-    svc.send_offline_notice.begin ((obj, res) => {
-        svc.send_offline_notice.end (res);
+    svc.send_shutdown_notice.begin (true, (obj, res) => {
+        svc.send_shutdown_notice.end (res);
         loop.quit ();
     });
     Timeout.add (100, () => { loop.quit (); return Source.REMOVE; });
     loop.run ();
+
+    // Should not crash when Matrix is null (manual stop)
+    var loop2 = new MainLoop ();
+    svc.send_shutdown_notice.begin (false, (obj, res) => {
+        svc.send_shutdown_notice.end (res);
+        loop2.quit ();
+    });
+    Timeout.add (100, () => { loop2.quit (); return Source.REMOVE; });
+    loop2.run ();
 }
 
 void test_sequence_number_in_message () {
@@ -361,7 +368,7 @@ void test_capture_digest_absent_when_no_captures () {
 
 void test_verification_section_below_separator () {
     var svc = new Vigil.Services.HeartbeatService ();
-    svc.config_hash = "abc123";
+    svc.sequence_number = 5;
 
     var msg = svc.build_heartbeat_message ();
 
@@ -369,11 +376,11 @@ void test_verification_section_below_separator () {
     var sep_pos = msg.index_of ("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500");
     assert_true (sep_pos >= 0);
     assert_true (msg.contains ("Verification data"));
-    assert_true (msg.contains ("config: abc123"));
+    assert_true (msg.contains ("seq: 5"));
 
-    // Config hash should appear AFTER the separator
-    var config_pos = msg.index_of ("config: abc123");
-    assert_true (config_pos > sep_pos);
+    // Seq line should appear AFTER the separator
+    var seq_pos = msg.index_of ("seq: 5");
+    assert_true (seq_pos > sep_pos);
 }
 
 void test_describe_tamper_event_known () {
@@ -492,6 +499,18 @@ void test_network_recovery_message () {
     assert_false (msg.contains ("could not reach the server"));
 }
 
+void test_describe_process_stopped () {
+    var result = Vigil.Services.HeartbeatService.describe_tamper_event (
+        "process_stopped: Vigil was stopped without a system shutdown");
+    assert_true (result.contains ("stopped or uninstalled"));
+    assert_true (result.contains ("NOT a system shutdown"));
+
+    // Also works with warning prefix
+    var result2 = Vigil.Services.HeartbeatService.describe_tamper_event (
+        "~process_stopped: Vigil was stopped without a system shutdown");
+    assert_true (result2.contains ("stopped or uninstalled"));
+}
+
 public static int main (string[] args) {
     Test.init (ref args);
 
@@ -521,8 +540,8 @@ public static int main (string[] args) {
         test_consecutive_failures_tracked);
     Test.add_func ("/heartbeat/gap_detection",
         test_gap_detection_in_message);
-    Test.add_func ("/heartbeat/offline_notice_no_matrix",
-        test_offline_notice_without_matrix);
+    Test.add_func ("/heartbeat/shutdown_notice_no_matrix",
+        test_shutdown_notice_without_matrix);
     Test.add_func ("/heartbeat/sequence_number",
         test_sequence_number_in_message);
     Test.add_func ("/heartbeat/alert_persistence",
@@ -571,6 +590,8 @@ public static int main (string[] args) {
         test_heartbeat_html_output);
     Test.add_func ("/heartbeat/html_warning_color",
         test_heartbeat_html_warning_color);
+    Test.add_func ("/heartbeat/describe_process_stopped",
+        test_describe_process_stopped);
 
     return Test.run ();
 }

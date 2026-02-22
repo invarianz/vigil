@@ -7,40 +7,6 @@
  * Unit tests for TamperDetectionService.
  */
 
-void test_config_hash_without_settings () {
-    var svc = new Vigil.Services.TamperDetectionService (null);
-    var hash = svc.compute_config_hash ();
-    assert_true (hash == "no-settings");
-}
-
-void test_config_hash_with_settings () {
-    var settings = new GLib.Settings ("io.github.invarianz.vigil");
-    var svc = new Vigil.Services.TamperDetectionService (settings);
-
-    var hash1 = svc.compute_config_hash ();
-    assert_true (hash1 != "");
-    assert_true (hash1 != "no-settings");
-
-    // Hash should be deterministic
-    var hash2 = svc.compute_config_hash ();
-    assert_true (hash1 == hash2);
-}
-
-void test_config_hash_changes_on_setting_change () {
-    var settings = new GLib.Settings ("io.github.invarianz.vigil");
-    var svc = new Vigil.Services.TamperDetectionService (settings);
-
-    var hash_before = svc.compute_config_hash ();
-
-    settings.set_int ("min-interval-seconds", 999);
-    var hash_after = svc.compute_config_hash ();
-
-    assert_true (hash_before != hash_after);
-
-    // Reset
-    settings.set_int ("min-interval-seconds", 30);
-}
-
 void test_settings_sanity_monitoring_disabled_unlocked () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     // Set Matrix settings so matrix_cleared / partner_changed don't also fire
@@ -988,9 +954,6 @@ void test_warning_report_method () {
 public static int main (string[] args) {
     Test.init (ref args);
 
-    Test.add_func ("/tamper/config_hash_no_settings", test_config_hash_without_settings);
-    Test.add_func ("/tamper/config_hash_with_settings", test_config_hash_with_settings);
-    Test.add_func ("/tamper/config_hash_changes", test_config_hash_changes_on_setting_change);
     Test.add_func ("/tamper/settings_monitoring_disabled_unlocked",
         test_settings_sanity_monitoring_disabled_unlocked);
     Test.add_func ("/tamper/settings_monitoring_disabled_locked",

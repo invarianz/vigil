@@ -49,7 +49,7 @@ foreach name, source : unit_tests
     )
 endforeach
 
-# Integration tests -- may use D-Bus, async patterns, mock backends
+# Integration tests -- may use async patterns, mock backends
 integration_tests = {
     'ScreenshotService': 'ScreenshotServiceTest.vala',
     'MatrixE2EEIntegration': 'MatrixE2EEIntegrationTest.vala',
@@ -71,17 +71,17 @@ foreach name, source : integration_tests
     )
 endforeach
 
-# D-Bus server tests -- need the DBusInterface source compiled in
-dbus_test_exe = executable(
-    'DBusServer_test',
-    'DBusServerTest.vala',
+# MonitoringEngine tests -- need the MonitoringEngine source compiled in
+engine_test_exe = executable(
+    'MonitoringEngine_test',
+    'MonitoringEngineTest.vala',
     test_utils,
-    files(meson.project_source_root() / 'src' / 'Daemon' / 'DBusInterface.vala'),
+    files(meson.project_source_root() / 'src' / 'MonitoringEngine.vala'),
     dependencies: [vigil_service_dep, json_dep],
     install: false,
 )
 
-test('DBusServer', dbus_test_exe,
+test('MonitoringEngine', engine_test_exe,
     suite: 'integration',
     timeout: 30,
     env: test_env,

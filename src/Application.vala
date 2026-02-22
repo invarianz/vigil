@@ -4,15 +4,24 @@
  */
 
 /**
- * GTK4 GUI application.
+ * Single-binary GTK4 application.
  *
- * This is a thin D-Bus client that connects to the Vigil daemon
- * (io.github.invarianz.vigil.Daemon) and displays status / settings.
- * All monitoring logic runs in the daemon process.
+ * Runs the monitoring engine in-process. With --background, starts
+ * headless (no window). User clicking the icon triggers activate()
+ * which shows the window.
  */
 public class Vigil.Application : Gtk.Application {
 
-    private Vigil.Daemon.IDaemonBus? daemon_proxy = null;
+    private Vigil.MonitoringEngine _engine;
+    private Vigil.Services.ScreenshotService _screenshot_svc;
+    private Vigil.Services.SchedulerService _scheduler_svc;
+    private Vigil.Services.StorageService _storage_svc;
+    private Vigil.Services.HeartbeatService _heartbeat_svc;
+    private Vigil.Services.TamperDetectionService _tamper_svc;
+    private Vigil.Services.MatrixTransportService _matrix_svc;
+    private GLib.Settings _settings;
+
+    private bool _background_mode = false;
 
     public Application () {
         Object (
@@ -26,6 +35,19 @@ public class Vigil.Application : Gtk.Application {
         Intl.bindtextdomain (Vigil.Config.APP_ID, Vigil.Config.LOCALEDIR);
         Intl.bind_textdomain_codeset (Vigil.Config.APP_ID, "UTF-8");
         Intl.textdomain (Vigil.Config.APP_ID);
+
+        add_main_option (
+            "background", 'b',
+            OptionFlags.NONE, OptionArg.NONE,
+            "Start in background mode (no window)", null
+        );
+    }
+
+    protected override int handle_local_options (VariantDict options) {
+        if (options.contains ("background")) {
+            _background_mode = true;
+        }
+        return -1; // continue to startup/activate
     }
 
     protected override void startup () {
@@ -51,105 +73,173 @@ public class Vigil.Application : Gtk.Application {
         add_action (quit_action);
         set_accels_for_action ("app.quit", { "<Control>q" });
 
-        // Connect to the daemon over D-Bus
-        connect_to_daemon.begin ();
+        // Keep process alive when window is closed
+        hold ();
+
+        // Create service instances
+        _screenshot_svc = new Vigil.Services.ScreenshotService ();
+        _scheduler_svc = new Vigil.Services.SchedulerService ();
+        _storage_svc = new Vigil.Services.StorageService ();
+        _settings = new GLib.Settings ("io.github.invarianz.vigil");
+        var settings = _settings;
+
+        // Set up Matrix transport with optional E2EE
+        _matrix_svc = new Vigil.Services.MatrixTransportService ();
+        var matrix_svc = _matrix_svc;
+        var enc_svc = new Vigil.Services.EncryptionService ();
+
+        // Prefer access token from secure file, fall back to GSettings
+        var file_token = Vigil.Services.MatrixTransportService.load_access_token_from_file ();
+        if (file_token != null) {
+            settings.set_string ("matrix-access-token", file_token);
+            debug ("Loaded access token from secure file");
+        }
+
+        // Restore E2EE state if setup was completed.
+        // Prefer pickle key from secure file, fall back to GSettings.
+        var device_id = settings.get_string ("device-id");
+        var user_id = settings.get_string ("matrix-user-id");
+        var pickle_key = Vigil.Services.EncryptionService.load_pickle_key_from_file ();
+        if (pickle_key == null) {
+            pickle_key = settings.get_string ("e2ee-pickle-key");
+            // Migrate: save to file and clear from GSettings
+            if (pickle_key != "") {
+                Vigil.Services.EncryptionService.save_pickle_key_to_file (pickle_key);
+                debug ("Migrated pickle key from GSettings to secure file");
+            }
+        } else {
+            debug ("Loaded pickle key from secure file");
+            // Ensure GSettings still has the key for tamper detection checks
+            // (the tamper service checks if pickle_key setting is empty)
+            if (settings.get_string ("e2ee-pickle-key") == "") {
+                settings.set_string ("e2ee-pickle-key", pickle_key);
+            }
+        }
+
+        bool e2ee_expected = device_id != "" && user_id != "" && pickle_key != "";
+        bool e2ee_ok = false;
+
+        if (e2ee_expected) {
+            enc_svc.device_id = device_id;
+            enc_svc.user_id = user_id;
+            if (enc_svc.initialize (pickle_key)) {
+                enc_svc.restore_group_session ();
+                debug ("E2EE initialized (session: %s)", enc_svc.megolm_session_id);
+                e2ee_ok = true;
+            } else {
+                warning ("E2EE initialization failed -- refusing to send unencrypted");
+            }
+        }
+
+        // Only attach encryption service if it initialized successfully.
+        // If E2EE was expected but failed, leave encryption null so
+        // MatrixTransportService refuses to send (no silent plaintext fallback).
+        if (e2ee_ok) {
+            matrix_svc.encryption = enc_svc;
+        }
+
+        _heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
+        _tamper_svc = new Vigil.Services.TamperDetectionService (settings);
+
+        // If E2EE was configured but failed to initialize, fire a tamper
+        // alert so the partner knows encryption is broken.
+        if (e2ee_expected && !e2ee_ok) {
+            _heartbeat_svc.report_tamper_event (
+                "E2EE initialization failed -- screenshots will NOT be sent " +
+                "until encryption is restored (pickle file may be corrupt " +
+                "or E2EE password may have changed)"
+            );
+            _tamper_svc.emit_e2ee_init_failure ();
+        }
+
+        _engine = new Vigil.MonitoringEngine (
+            _screenshot_svc,
+            _scheduler_svc,
+            _storage_svc,
+            _heartbeat_svc,
+            _tamper_svc,
+            matrix_svc,
+            settings
+        );
+
+        // Initialize asynchronously
+        _engine.initialize.begin ((obj, res) => {
+            _engine.initialize.end (res);
+            debug ("Monitoring engine initialized, backend: %s",
+                _screenshot_svc.active_backend_name ?? "none");
+        });
     }
 
     protected override void activate () {
+        // First activation with --background: skip window
+        if (_background_mode) {
+            _background_mode = false;
+            debug ("Started in background mode");
+            return;
+        }
+
         var window = active_window;
         if (window == null) {
-            window = new Vigil.MainWindow (this, daemon_proxy);
+            window = new Vigil.MainWindow (this, _engine);
         }
         window.present ();
     }
 
-    private async void connect_to_daemon () {
-        // Try connecting to an already-running daemon
-        daemon_proxy = yield try_dbus_connect ();
-        if (daemon_proxy != null) {
-            debug ("Connected to Vigil daemon over D-Bus");
-            update_window_proxy ();
-            return;
-        }
+    protected override void shutdown () {
+        bool system_shutdown = _engine != null && _engine.system_shutdown_pending;
 
-        // Daemon not running — spawn it
-        if (!try_spawn_daemon ()) {
-            warning ("Could not connect to or spawn Vigil daemon");
-            return;
-        }
+        // If this is NOT a system shutdown, report tamper or warning
+        if (!system_shutdown && _tamper_svc != null && _matrix_svc != null) {
+            bool locked = _settings != null &&
+                _settings.get_boolean ("settings-locked");
+            if (locked) {
+                _tamper_svc.report_tamper ("process_stopped",
+                    "Vigil was stopped without a system shutdown");
+            } else {
+                _tamper_svc.report_warning ("process_stopped",
+                    "Vigil was stopped without a system shutdown");
+            }
 
-        // Retry connection while daemon starts up and registers on D-Bus
-        for (int i = 0; i < 4; i++) {
-            yield async_delay (500 + i * 500);
-            daemon_proxy = yield try_dbus_connect ();
-            if (daemon_proxy != null) {
-                debug ("Connected to Vigil daemon over D-Bus (after spawn)");
-                update_window_proxy ();
-                return;
+            // Send the immediate tamper/warning alert
+            if (_matrix_svc.is_configured) {
+                var alert_loop = new MainLoop (null, false);
+                _matrix_svc.send_alert.begin (
+                    "process_stopped",
+                    "Vigil was stopped without a system shutdown",
+                    (obj, res) => {
+                        _matrix_svc.send_alert.end (res);
+                        alert_loop.quit ();
+                    }
+                );
+                Timeout.add_seconds (3, () => {
+                    alert_loop.quit ();
+                    return Source.REMOVE;
+                });
+                alert_loop.run ();
             }
         }
 
-        warning ("Daemon spawned but D-Bus registration timed out");
-    }
+        // Send "going offline" notice so the partner knows silence is expected
+        if (_heartbeat_svc != null) {
+            var loop = new MainLoop (null, false);
+            _heartbeat_svc.send_shutdown_notice.begin (system_shutdown, (obj, res) => {
+                _heartbeat_svc.send_shutdown_notice.end (res);
+                loop.quit ();
+            });
+            // Spin for at most 5 seconds, then give up
+            Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });
+            loop.run ();
 
-    private async Vigil.Daemon.IDaemonBus? try_dbus_connect () {
-        try {
-            return yield Bus.get_proxy<Vigil.Daemon.IDaemonBus> (
-                BusType.SESSION,
-                "io.github.invarianz.vigil.Daemon",
-                "/io/github/invarianz/vigil/Daemon"
-            );
-        } catch (Error e) {
-            debug ("D-Bus connect attempt: %s", e.message);
-            return null;
+            _heartbeat_svc.stop ();
         }
-    }
-
-    /**
-     * Spawn the daemon binary from the same directory as the GUI binary.
-     * Works for both Flatpak (/app/bin/) and development (builddir/).
-     */
-    private bool try_spawn_daemon () {
-        try {
-            var gui_path = FileUtils.read_link ("/proc/self/exe");
-            var daemon_path = Path.build_filename (
-                Path.get_dirname (gui_path),
-                Vigil.Config.APP_ID + ".daemon"
-            );
-
-            if (!FileUtils.test (daemon_path, FileTest.IS_EXECUTABLE)) {
-                warning ("Daemon binary not found at %s", daemon_path);
-                return false;
-            }
-
-            debug ("Spawning daemon: %s", daemon_path);
-            Process.spawn_async (
-                null,
-                { daemon_path },
-                null,
-                SpawnFlags.DO_NOT_REAP_CHILD,
-                null,
-                null
-            );
-            return true;
-        } catch (Error e) {
-            warning ("Failed to spawn daemon: %s", e.message);
-            return false;
+        if (_tamper_svc != null) {
+            _tamper_svc.stop ();
         }
-    }
-
-    private void update_window_proxy () {
-        if (active_window != null) {
-            ((Vigil.MainWindow) active_window).set_daemon_proxy (daemon_proxy);
+        if (_scheduler_svc != null) {
+            _scheduler_svc.stop ();
         }
-    }
 
-    private async void async_delay (uint ms) {
-        Timeout.add (ms, () => {
-            async_delay.callback ();
-            return Source.REMOVE;
-        });
-        yield;
+        base.shutdown ();
     }
 
     public static int main (string[] args) {

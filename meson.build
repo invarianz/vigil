@@ -52,19 +52,7 @@ config_file = configure_file(
     configuration: conf_data
 )
 
-# All non-GTK dependencies shared by daemon and service library
-service_deps = [
-    glib_dep,
-    gobject_dep,
-    gio_dep,
-    json_dep,
-    soup_dep,
-    portal_dep,
-    olm_dep,
-    openssl_dep,
-]
-
-# All dependencies including GTK/Granite (for the GUI app)
+# All dependencies (GTK/Granite + service layer)
 all_dependencies = [
     glib_dep,
     gobject_dep,
@@ -80,7 +68,7 @@ all_dependencies = [
 ]
 
 # ──────────────────────────────────────────────────────────────
-#  Service layer: shared between daemon and tests
+#  Service layer: shared between app and tests
 # ──────────────────────────────────────────────────────────────
 service_src_files = files(
     'src' / 'Services' / 'ScreenshotService.vala',
@@ -93,6 +81,18 @@ service_src_files = files(
     'src' / 'Services' / 'EncryptionService.vala',
     'src' / 'Services' / 'SecurityUtils.vala',
 )
+
+# Non-GTK deps for the service library (also used by tests)
+service_deps = [
+    glib_dep,
+    gobject_dep,
+    gio_dep,
+    json_dep,
+    soup_dep,
+    portal_dep,
+    olm_dep,
+    openssl_dep,
+]
 
 vigil_service_lib = static_library(
     'vigil-services',
@@ -111,30 +111,10 @@ vigil_service_dep = declare_dependency(
 )
 
 # ──────────────────────────────────────────────────────────────
-#  Daemon: headless monitoring engine (no GTK)
+#  Single binary: GUI + monitoring engine
 # ──────────────────────────────────────────────────────────────
-daemon_src_files = files(
-    'src' / 'Daemon' / 'DBusInterface.vala',
-    'src' / 'Daemon' / 'Main.vala',
-)
-
-executable(
-    app_id + '.daemon',
-    daemon_src_files,
-    config_file,
-    dependencies: [vigil_service_dep, json_dep],
-    install: true,
-)
-
-# ──────────────────────────────────────────────────────────────
-#  GUI: thin D-Bus client (needs GTK/Granite)
-# ──────────────────────────────────────────────────────────────
-# The GUI needs the D-Bus interface definition for the proxy
-gui_dbus_src = files(
-    'src' / 'Daemon' / 'DBusInterface.vala',
-)
-
 ui_src_files = files(
+    'src' / 'MonitoringEngine.vala',
     'src' / 'MainWindow.vala',
     'src' / 'Widgets' / 'StatusView.vala',
     'src' / 'Widgets' / 'RangeScale.vala',
@@ -144,7 +124,6 @@ ui_src_files = files(
 executable(
     app_id,
     ui_src_files,
-    gui_dbus_src,
     config_file,
     'src' / 'Application.vala',
     dependencies: all_dependencies + [vigil_service_dep],
@@ -155,7 +134,7 @@ executable(
 #  Data files
 # ──────────────────────────────────────────────────────────────
 
-# Desktop file (GUI)
+# Desktop file
 i18n.merge_file(
     input: 'data' / 'vigil.desktop.in',
     output: app_id + '.desktop',

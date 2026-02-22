@@ -65,9 +65,6 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Whether file monitoring is active. */
     private bool _file_monitoring_active = false;
 
-    /** Cached config hash (invalidated on settings change). */
-    private string? _cached_config_hash = null;
-
     /** Crypto files seen on disk (for periodic existence checking). */
     private GenericSet<string> _crypto_files_seen;
 
@@ -219,46 +216,6 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     /**
-     * Compute a SHA256 hash of current GSettings values that matter.
-     * Used to detect config changes between heartbeats.
-     *
-     * The result is cached and invalidated when any watched setting
-     * changes (via connect_settings_signals). This eliminates 12
-     * GSettings reads + string formatting + SHA-256 on cache hits.
-     */
-    public string compute_config_hash () {
-        if (_settings == null) {
-            return "no-settings";
-        }
-
-        if (_cached_config_hash != null) {
-            return _cached_config_hash;
-        }
-
-        // Hash a "is-set" sentinel for the pickle key rather than the raw
-        // secret, to avoid passing the key through unnecessary code paths.
-        var pickle_key_set = _settings.get_string ("e2ee-pickle-key") != "";
-
-        var data = "%s|%s|%s|%d|%d|%b|%s|%b|%s|%d|%d|%d".printf (
-            _settings.get_string ("matrix-homeserver-url"),
-            _settings.get_string ("matrix-access-token"),
-            _settings.get_string ("matrix-room-id"),
-            _settings.get_int ("min-interval-seconds"),
-            _settings.get_int ("max-interval-seconds"),
-            _settings.get_boolean ("monitoring-enabled"),
-            _settings.get_string ("device-id"),
-            pickle_key_set,
-            _settings.get_string ("partner-matrix-id"),
-            _settings.get_int ("heartbeat-interval-seconds"),
-            _settings.get_int ("upload-batch-interval-seconds"),
-            _settings.get_int ("tamper-check-interval-seconds")
-        );
-
-        _cached_config_hash = SecurityUtils.compute_sha256_hex_string (data);
-        return _cached_config_hash;
-    }
-
-    /**
      * Check that GSettings values are sane (not tampered to disable monitoring).
      */
     public void check_settings_sanity () {
@@ -362,7 +319,9 @@ public class Vigil.Services.TamperDetectionService : Object {
         if (bg_granted) {
             _background_portal_was_granted = true;
         } else if (_background_portal_was_granted) {
-            emit_background_permission_revoked ();
+            emit_lock_dependent (locked, "background_permission_revoked",
+                "Background portal autostart permission was revoked -- " +
+                "daemon will not auto-start at next login");
         }
 
         // Check if settings lock was bypassed
@@ -436,8 +395,6 @@ public class Vigil.Services.TamperDetectionService : Object {
 
         foreach (var key in critical_keys) {
             _settings.changed[key].connect (() => {
-                // Invalidate cached config hash on any settings change
-                _cached_config_hash = null;
                 if (is_running) {
                     debug ("Critical setting changed, running tamper check");
                     check_settings_sanity ();
@@ -559,9 +516,13 @@ public class Vigil.Services.TamperDetectionService : Object {
     /**
      * Emit a tamper event for E2EE initialization failure.
      * Called by the daemon when E2EE was configured but failed to start.
+     * Severity depends on settings lock state: if locked, the user has
+     * no reason to be touching encryption files, so failure is suspicious.
      */
     public void emit_e2ee_init_failure () {
-        emit_warning ("e2ee_init_failed",
+        bool locked = _settings != null &&
+            _settings.get_boolean ("settings-locked");
+        emit_lock_dependent (locked, "e2ee_init_failed",
             "E2EE initialization failed at startup -- " +
             "monitoring will not send screenshots until encryption is restored");
     }
@@ -569,9 +530,12 @@ public class Vigil.Services.TamperDetectionService : Object {
     /**
      * Emit a tamper event for background portal permission revocation.
      * Called by the daemon when the XDG Background portal denies autostart.
+     * Severity depends on settings lock state.
      */
     public void emit_background_permission_revoked () {
-        emit_warning ("background_permission_revoked",
+        bool locked = _settings != null &&
+            _settings.get_boolean ("settings-locked");
+        emit_lock_dependent (locked, "background_permission_revoked",
             "Background portal autostart permission was revoked -- " +
             "daemon will not auto-start at next login");
     }

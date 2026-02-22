@@ -76,23 +76,17 @@ public class Vigil.Services.ScreenshotService : Object {
      * Take a screenshot via Gala's org.gnome.Shell.Screenshot D-Bus interface.
      * Silent — no screen flash or animation.
      *
-     * Gala runs on the host and cannot write directly into Flatpak's
-     * remapped data directory, so we ask it to write to /tmp and then
-     * copy the result to the final destination ourselves.
+     * Gala writes directly to the destination path. Even though Gala runs
+     * on the host, ~/.var/app/ is a regular host directory that Gala can
+     * write to (same user, no permission barrier).
      */
     private async bool take_screenshot_gala (string destination_path) {
         try {
-            // Gala runs on the host and can't write into Flatpak's private
-            // XDG_DATA_HOME (~/.var/app/...). Use the shared filesystem
-            // grant (--filesystem=xdg-data/io.github.invarianz.vigil) at
-            // ~/.local/share/io.github.invarianz.vigil — accessible to both.
-            var shared_dir = Path.build_filename (
-                Environment.get_home_dir (),
-                ".local", "share", "io.github.invarianz.vigil"
-            );
-            var tmp_path = Path.build_filename (
-                shared_dir, ".gala-capture-%s.png".printf (
-                    GLib.get_monotonic_time ().to_string ()));
+            var dest = File.new_for_path (destination_path);
+            var dest_dir = dest.get_parent ();
+            if (dest_dir != null && !dest_dir.query_exists ()) {
+                dest_dir.make_directory_with_parents (null);
+            }
 
             var connection = yield Bus.get (BusType.SESSION);
 
@@ -101,7 +95,7 @@ public class Vigil.Services.ScreenshotService : Object {
                 "/org/gnome/Shell/Screenshot",
                 "org.gnome.Shell.Screenshot",
                 "Screenshot",
-                new Variant ("(bbs)", false, false, tmp_path),
+                new Variant ("(bbs)", false, false, destination_path),
                 new VariantType ("(bs)"),
                 DBusCallFlags.NONE,
                 10000,
@@ -114,29 +108,6 @@ public class Vigil.Services.ScreenshotService : Object {
 
             if (!success) {
                 throw new IOError.FAILED ("Gala Screenshot returned failure");
-            }
-
-            // Copy from host-accessible /tmp to app data directory
-            var source = File.new_for_path (
-                filename_used != "" ? filename_used : tmp_path);
-            var dest = File.new_for_path (destination_path);
-
-            var dest_dir = dest.get_parent ();
-            if (dest_dir != null && !dest_dir.query_exists ()) {
-                dest_dir.make_directory_with_parents (null);
-            }
-
-            yield source.copy_async (
-                dest,
-                FileCopyFlags.OVERWRITE | FileCopyFlags.TARGET_DEFAULT_PERMS,
-                Priority.DEFAULT, null, null
-            );
-
-            // Clean up temp file
-            try {
-                yield source.delete_async (Priority.DEFAULT, null);
-            } catch (Error e) {
-                debug ("Could not delete Gala temp file: %s", e.message);
             }
 
             screenshot_taken (destination_path);

@@ -20,8 +20,7 @@
  *   11. StorageService cleanup_old_screenshots (100 files)
  *   12. Pending count: cached vs directory scan
  *   13. File read (2MB sync)
- *   14. TamperDetectionService.compute_config_hash
- *   15. Full encrypted pipeline simulation (sans network)
+ *   14. Full encrypted pipeline simulation (sans network)
  *
  * Run with: ./PerformanceBenchmark_test
  * Each benchmark prints: operation, iterations, total_us, per_op_us
@@ -441,15 +440,6 @@ void bench_file_read_2mb () {
     });
 
     FileUtils.remove (fake_path);
-}
-
-void bench_config_hash () {
-    var settings = new GLib.Settings ("io.github.invarianz.vigil");
-    var svc = new Vigil.Services.TamperDetectionService (settings);
-
-    bench ("compute_config_hash (SHA256)", 2000, () => {
-        svc.compute_config_hash ();
-    });
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1074,7 +1064,6 @@ public static int main (string[] args) {
 
     print ("\n── 5. I/O ──────────────────────────────────────────────────────────────────\n");
     bench_file_read_2mb ();
-    bench_config_hash ();
 
     print ("\n── 6. Full Pipeline (no network) ────────────────────────────────────────────\n");
     bench_full_pipeline_no_network ();

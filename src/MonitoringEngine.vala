@@ -4,49 +4,12 @@
  */
 
 /**
- * D-Bus interface definition for the Vigil daemon.
+ * Central monitoring engine.
  *
- * The daemon owns all monitoring services and exposes status/control
- * over the session bus. The GUI app is a thin D-Bus client.
- *
- * Bus name: io.github.invarianz.vigil.Daemon
- * Object path: /io/github/invarianz/vigil/Daemon
+ * Owns all monitoring services and exposes status/control to the GUI.
+ * Runs in-process — no D-Bus IPC needed.
  */
-
-/**
- * The D-Bus interface that the GUI connects to as a proxy.
- */
-[DBus (name = "io.github.invarianz.vigil.Daemon")]
-public interface Vigil.Daemon.IDaemonBus : Object {
-
-    /* Read-only properties exposed on D-Bus */
-    public abstract bool monitoring_active { get; }
-    public abstract string active_backend_name { owned get; }
-    public abstract string next_capture_time_iso { owned get; }
-    public abstract string last_capture_time_iso { owned get; }
-    public abstract int pending_upload_count { get; }
-    public abstract bool screenshot_permission_ok { get; }
-    public abstract int64 uptime_seconds { get; }
-    public abstract string[] recent_tamper_events { owned get; }
-
-    /* Methods callable over D-Bus */
-    public abstract async void request_capture () throws Error;
-    public abstract string get_status_json () throws Error;
-
-    /* Signals relayed over D-Bus */
-    public signal void status_changed ();
-    public signal void screenshot_captured (string path);
-    public signal void screenshot_capture_failed (string message);
-    public signal void tamper_event (string event_type, string details);
-}
-
-/**
- * Server-side implementation of the D-Bus interface.
- *
- * Wraps all the service objects and exposes a clean bus API.
- */
-[DBus (name = "io.github.invarianz.vigil.Daemon")]
-public class Vigil.Daemon.DBusServer : Object {
+public class Vigil.MonitoringEngine : Object {
 
     private Vigil.Services.ScreenshotService _screenshot_svc;
     private Vigil.Services.SchedulerService _scheduler_svc;
@@ -63,9 +26,10 @@ public class Vigil.Daemon.DBusServer : Object {
     private uint _key_sharing_source = 0;
     private bool _room_keys_shared = false;
 
-    /* D-Bus properties */
+    /* Properties */
 
     public bool monitoring_active { get; private set; default = false; }
+    public bool system_shutdown_pending { get; private set; default = false; }
 
     public string active_backend_name {
         owned get {
@@ -88,12 +52,6 @@ public class Vigil.Daemon.DBusServer : Object {
                 return "";
             }
             return _scheduler_svc.last_capture_time.format_iso8601 ();
-        }
-    }
-
-    public int pending_upload_count {
-        get {
-            return _cached_pending_count;
         }
     }
 
@@ -122,13 +80,13 @@ public class Vigil.Daemon.DBusServer : Object {
         }
     }
 
-    /* D-Bus signals */
+    /* Signals */
     public signal void status_changed ();
     public signal void screenshot_captured (string path);
     public signal void screenshot_capture_failed (string message);
     public signal void tamper_event (string event_type, string details);
 
-    public DBusServer (
+    public MonitoringEngine (
         Vigil.Services.ScreenshotService screenshot_svc,
         Vigil.Services.SchedulerService scheduler_svc,
         Vigil.Services.StorageService storage_svc,
@@ -152,14 +110,14 @@ public class Vigil.Daemon.DBusServer : Object {
     /**
      * Request an immediate screenshot capture.
      */
-    public async void request_capture () throws Error {
+    public async void request_capture () {
         yield handle_capture ();
     }
 
     /**
-     * Get a JSON blob with the full daemon status.
+     * Get a JSON blob with the full engine status.
      */
-    public string get_status_json () throws Error {
+    public string get_status_json () {
         var builder = new Json.Builder ();
         builder.begin_object ();
 
@@ -174,9 +132,6 @@ public class Vigil.Daemon.DBusServer : Object {
 
         builder.set_member_name ("last_capture");
         builder.add_string_value (last_capture_time_iso);
-
-        builder.set_member_name ("pending_uploads");
-        builder.add_int_value (pending_upload_count);
 
         builder.set_member_name ("uptime_seconds");
         builder.add_int_value (uptime_seconds);
@@ -204,6 +159,23 @@ public class Vigil.Daemon.DBusServer : Object {
         if (_storage_svc.capture_counter_tampered) {
             _tamper_svc.report_tamper ("capture_counter_tampered",
                 "Capture counter file HMAC is invalid (file was modified)");
+        }
+
+        // Subscribe to login1 PrepareForShutdown to distinguish system
+        // shutdown from manual kill/uninstall
+        try {
+            var system_bus = yield Bus.get (BusType.SYSTEM);
+            system_bus.signal_subscribe (
+                "org.freedesktop.login1",
+                "org.freedesktop.login1.Manager",
+                "PrepareForShutdown",
+                "/org/freedesktop/login1",
+                null,
+                DBusSignalFlags.NONE,
+                on_prepare_for_shutdown
+            );
+        } catch (Error e) {
+            debug ("Could not subscribe to login1 signals: %s", e.message);
         }
 
         _heartbeat_svc.lifetime_captures = _storage_svc.lifetime_captures;
@@ -250,6 +222,9 @@ public class Vigil.Daemon.DBusServer : Object {
         // Request background/autostart permission via XDG portal (Flatpak)
         yield request_background_portal ();
         schedule_background_portal_check ();
+
+        // Notify UI that initialization is complete (backend name, etc.)
+        status_changed ();
     }
 
     private void start_monitoring () {
@@ -264,6 +239,16 @@ public class Vigil.Daemon.DBusServer : Object {
         _scheduler_svc.stop ();
         _heartbeat_svc.monitoring_active = false;
         status_changed ();
+    }
+
+    private void on_prepare_for_shutdown (DBusConnection conn, string? sender,
+        string object_path, string interface_name, string signal_name,
+        Variant parameters) {
+        bool active;
+        parameters.get ("(b)", out active);
+        if (active) {
+            system_shutdown_pending = true;
+        }
     }
 
     private void connect_signals () {
@@ -313,9 +298,7 @@ public class Vigil.Daemon.DBusServer : Object {
         });
 
         _heartbeat_svc.heartbeat_sent.connect (() => {
-            _heartbeat_svc.config_hash = _tamper_svc.compute_config_hash ();
             refresh_pending_count ();
-            _heartbeat_svc.pending_upload_count = _cached_pending_count;
         });
 
         // Listen for monitoring toggle from settings
@@ -377,7 +360,7 @@ public class Vigil.Daemon.DBusServer : Object {
             _matrix_svc.room_id = _settings.get_string ("matrix-room-id");
         });
 
-        // Re-initialize E2EE when setup completes while daemon is running.
+        // Re-initialize E2EE when setup completes while engine is running.
         // Watch both pickle-key and device-id: if the user re-runs setup
         // with the same pickle password, only device-id changes (new login),
         // and vice versa.
@@ -413,7 +396,7 @@ public class Vigil.Daemon.DBusServer : Object {
         enc.device_id = device_id;
         enc.user_id = user_id;
 
-        // restore_only: daemon must not create new Olm accounts — the GUI
+        // restore_only: must not create new Olm accounts — the GUI
         // does that during setup. If the pickle isn't written yet (race with
         // GUI), we retry shortly.
         if (enc.initialize (pickle_key, true)) {
@@ -445,7 +428,7 @@ public class Vigil.Daemon.DBusServer : Object {
      * Attempts to share the Megolm session key immediately, then retries
      * every 60 seconds until successful. This handles the case where
      * the partner hasn't set up their Element client yet when Vigil
-     * first runs, or when the daemon restarts with a new session.
+     * first runs, or when the engine restarts with a new session.
      */
     private void schedule_key_sharing () {
         if (_room_keys_shared || _key_sharing_source != 0) {
@@ -658,7 +641,8 @@ public class Vigil.Daemon.DBusServer : Object {
             var portal = new Xdp.Portal ();
 
             var commandline = new GenericArray<unowned string> ();
-            commandline.add ("io.github.invarianz.vigil.daemon");
+            commandline.add ("io.github.invarianz.vigil");
+            commandline.add ("--background");
 
             bool granted = yield portal.request_background (
                 null,

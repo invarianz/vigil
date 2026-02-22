@@ -11,9 +11,6 @@ finish-args:
   - '--share=network'
   - '--talk-name=org.freedesktop.portal.Desktop'
   - '--talk-name=org.gnome.Shell.Screenshot'
-  - '--talk-name=io.github.invarianz.vigil.Daemon'
-  - '--own-name=io.github.invarianz.vigil.Daemon'
-  - '--filesystem=xdg-data/io.github.invarianz.vigil:create'
   - '--system-talk-name=org.freedesktop.login1'
 
 modules:

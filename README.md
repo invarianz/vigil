@@ -37,7 +37,7 @@ Your partner doesn't need any technical knowledge. They just watch for screensho
 - **Unpredictable timing** -- screenshots are taken at random intervals so they can't be anticipated
 - **End-to-end encrypted** -- screenshots are encrypted on your device before upload; the server never sees them
 - **One-click setup** -- enter your account details, click Setup, and Vigil handles login, room creation, and encryption automatically
-- **Tamper detection** -- alerts your partner if the daemon is stopped, settings are changed via dconf, or files are modified. Distinguishes between **tamper attempts** (bold red) and **warnings** (orange) based on severity
+- **Tamper detection** -- alerts your partner if Vigil is stopped, settings are changed via dconf, or files are modified. Distinguishes between **tamper attempts** (bold red) and **warnings** (orange) based on severity
 - **Dead man's switch** -- heartbeat messages include a "next check-in by" deadline so your partner knows exactly when to expect the next update
 - **Offline resilience** -- queues screenshots for delivery when offline, retries on reconnect
 - **Settings lock** -- after setup, settings are locked behind a code that only your partner knows
@@ -186,6 +186,9 @@ Here are the types of problems Vigil can detect:
 | Your partner ID was changed or removed | Partner Matrix ID was cleared |
 | Encryption keys were deleted | E2EE pickle key was cleared |
 | Service timer was changed | Heartbeat, upload, or tamper-check interval was set very high |
+| Vigil was stopped or uninstalled | Vigil was manually stopped (not a system shutdown) |
+| Permission to run in the background was revoked | XDG Background portal permission lost |
+| Encryption failed to start | E2EE init failed -- no screenshots will be sent |
 
 **Always a warning** (system issues):
 
@@ -193,16 +196,16 @@ Here are the types of problems Vigil can detect:
 |---|---|
 | No screenshot was taken when expected | Capture may have stalled (portal denied, compositor crash) |
 | Disk space is critically low | Less than 50 MB free |
-| Encryption failed to start | E2EE initialization error |
-| Permission to run in the background was revoked | XDG Background portal permission lost |
 | Device was unmonitored for a period | Gap detected (sleep, shutdown, or outage) |
 | Settings unlocked with correct code | Authorized unlock via GUI (partner should verify they gave the code) |
 
 The next heartbeat will also include any alerts that occurred since the last update, so nothing is missed even if an individual alert fails to send.
 
-### Forced kill or uninstall
+### Manual stop or uninstall
 
-If Vigil is killed with `kill -9`, the power is pulled, or it's uninstalled entirely, there is no opportunity to send a message. This is exactly what the deadline handles: the "if no new message arrives within 30 minutes" deadline passes with no message, and your partner knows something is wrong.
+If Vigil is stopped with `flatpak kill`, terminated with SIGTERM, or uninstalled, it detects that this was NOT a system shutdown (no `PrepareForShutdown` signal from systemd-logind) and sends a tamper alert (if settings are locked) or warning (if unlocked) before going offline.
+
+If Vigil is killed with `kill -9` or the power is pulled, there is no opportunity to send any message. This is exactly what the deadline handles: the "if no new message arrives within 30 minutes" deadline passes with no message, and your partner knows something is wrong.
 
 ### What your partner needs to remember
 
@@ -229,10 +232,10 @@ Vigil implements the Matrix end-to-end encryption protocol natively using libolm
 
 ### Architecture
 
-Vigil runs as two processes:
-
-- **vigil-daemon** -- a background service (inside the Flatpak sandbox) that captures screenshots, encrypts them, sends them via Matrix, and monitors for tampering. Runs even when the GUI is closed.
-- **vigil** -- a GTK 4 app for status and settings. Connects to the daemon over D-Bus. Handles one-time setup.
+Vigil is a single GTK 4 application (inside the Flatpak sandbox) that runs
+the monitoring engine in-process. With `--background`, it starts headless
+(no window) for autostart at login. Clicking the icon opens the GUI window;
+closing the window hides it while the engine keeps running.
 
 ### What happens when a screenshot is taken
 
@@ -280,7 +283,7 @@ meson compile -C build
 meson test -C build
 ```
 
-The daemon uses the XDG Background portal for autostart -- no manual service setup is needed. Autostart is requested automatically on first launch.
+Vigil uses the XDG Background portal for autostart with `--background` -- no manual service setup is needed. Autostart is requested automatically on first launch.
 
 ## License
 

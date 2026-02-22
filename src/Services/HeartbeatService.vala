@@ -57,17 +57,11 @@ public class Vigil.Services.HeartbeatService : Object {
     /** Count of screenshots taken since last heartbeat. */
     public int screenshots_since_last { get; set; default = 0; }
 
-    /** Current pending upload count. */
-    public int pending_upload_count { get; set; default = 0; }
-
     /** Whether screenshot monitoring is active. */
     public bool monitoring_active { get; set; default = false; }
 
     /** Whether screenshot permission is granted. */
     public bool screenshot_permission_ok { get; set; default = true; }
-
-    /** Hash of current configuration for tamper detection. */
-    public string config_hash { get; set; default = ""; }
 
     /** Number of consecutive heartbeat send failures. */
     public int consecutive_failures { get; private set; default = 0; }
@@ -180,14 +174,13 @@ public class Vigil.Services.HeartbeatService : Object {
     }
 
     /**
-     * Send a "going offline" message before clean shutdown.
+     * Send a "going offline" message before shutdown.
      *
-     * This tells the accountability partner that upcoming silence is
-     * expected (device shutting down or daemon stopping), rather than
-     * suspicious. Explicitly cancels the deadline from the previous heartbeat
-     * so the partner doesn't panic when it passes with no new message.
+     * @param system_shutdown true if PrepareForShutdown was received
+     *        (legitimate reboot/poweroff), false if SIGTERM arrived
+     *        without it (manual kill, flatpak uninstall, etc.)
      */
-    public async void send_offline_notice () {
+    public async void send_shutdown_notice (bool system_shutdown) {
         if (_matrix_svc == null || !_matrix_svc.is_configured) {
             return;
         }
@@ -196,14 +189,18 @@ public class Vigil.Services.HeartbeatService : Object {
 
         var sb = new StringBuilder ();
         sb.append ("NOTICE: Going offline\n\n");
-        sb.append ("The computer is shutting down or restarting. This is normal.\n");
-        sb.append ("Vigil will start again automatically when the computer turns back on.\n");
-        sb.append ("You can ignore the deadline from the previous message \u2014 ");
-        sb.append ("silence is expected until the computer restarts.\n\n");
-        sb.append_printf ("Was running for %s. ", format_duration (uptime));
-        sb.append_printf ("%d %s waiting to send.",
-            pending_upload_count,
-            pending_upload_count == 1 ? "screenshot" : "screenshots");
+
+        if (system_shutdown) {
+            sb.append ("The computer is shutting down or restarting. This is normal.\n");
+            sb.append ("Vigil will start again automatically when the computer turns back on.\n");
+            sb.append ("You can ignore the deadline from the previous message \u2014 ");
+            sb.append ("silence is expected until the computer restarts.\n\n");
+        } else {
+            sb.append ("Vigil was stopped manually (not a system shutdown or restart).\n");
+            sb.append ("If you did not authorize this, investigate immediately.\n\n");
+        }
+
+        sb.append_printf ("Was running for %s.", format_duration (uptime));
 
         yield _matrix_svc.send_text_message (sb.str);
     }
@@ -394,8 +391,8 @@ public class Vigil.Services.HeartbeatService : Object {
         }
 
         // ── Stats ──
-        var stats = "\n\nRunning for %s.\nScreenshots taken: %d\nWaiting to send: %d".printf (
-            format_duration (uptime), screenshots_since_last, pending_upload_count);
+        var stats = "\n\nRunning for %s.\nScreenshots taken: %d".printf (
+            format_duration (uptime), screenshots_since_last);
         sb.append (stats);
         html.append ("<br><br>");
         html.append (Markup.escape_text (stats.strip ()).replace ("\n", "<br>"));
@@ -429,18 +426,6 @@ public class Vigil.Services.HeartbeatService : Object {
             sb.append_printf ("\n%s", env_line);
             html.append_printf ("\n%s", Markup.escape_text (env_line));
             _attestation_sent = true;
-        }
-
-        if (config_hash != "") {
-            sb.append_printf ("\nconfig: %s", config_hash);
-            html.append_printf ("\nconfig: %s", Markup.escape_text (config_hash));
-            if (encryption != null && encryption.is_ready) {
-                var signature = encryption.sign_string (config_hash);
-                if (signature != "") {
-                    sb.append_printf (" | sig: %s", signature);
-                    html.append_printf (" | sig: %s", Markup.escape_text (signature));
-                }
-            }
         }
 
         if (_capture_hashes.length > 0) {
@@ -598,6 +583,10 @@ public class Vigil.Services.HeartbeatService : Object {
                 return "Vigil is running outside its Flatpak sandbox. " +
                     "All security protections are bypassed \u2014 " +
                     "screenshots and encryption cannot be trusted.";
+            case "process_stopped":
+                return "Vigil was stopped or uninstalled. " +
+                    "This was NOT a system shutdown \u2014 " +
+                    "someone manually stopped Vigil.";
             default:
                 return raw_event;
         }

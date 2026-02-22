@@ -4,10 +4,10 @@
  */
 
 /**
- * Tests for the Daemon DBusServer.
+ * Tests for the MonitoringEngine.
  *
- * These tests verify the DBusServer wiring without an actual D-Bus
- * connection. We test:
+ * These tests verify the engine wiring without a running application.
+ * We test:
  *   - Initial state
  *   - Status JSON generation
  *   - Signal propagation (tamper events)
@@ -25,9 +25,9 @@ void cleanup_storage () {
 }
 
 /**
- * Create a DBusServer with real service objects (but no D-Bus export).
+ * Create a MonitoringEngine with real service objects.
  */
-Vigil.Daemon.DBusServer create_test_server () {
+Vigil.MonitoringEngine create_test_engine () {
     setup_storage ();
 
     var screenshot_svc = new Vigil.Services.ScreenshotService ();
@@ -40,7 +40,7 @@ Vigil.Daemon.DBusServer create_test_server () {
     // meson test sets GSETTINGS_SCHEMA_DIR and GSETTINGS_BACKEND=memory
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
 
-    return new Vigil.Daemon.DBusServer (
+    return new Vigil.MonitoringEngine (
         screenshot_svc,
         scheduler_svc,
         storage_svc,
@@ -52,24 +52,24 @@ Vigil.Daemon.DBusServer create_test_server () {
 }
 
 void test_initial_state () {
-    var server = create_test_server ();
+    var engine = create_test_engine ();
 
-    assert_false (server.monitoring_active);
-    assert_true (server.active_backend_name == "none");
-    assert_true (server.next_capture_time_iso == "");
-    assert_true (server.last_capture_time_iso == "");
-    assert_true (server.screenshot_permission_ok == true);
-    assert_true (server.uptime_seconds >= 0);
+    assert_false (engine.monitoring_active);
+    assert_true (engine.active_backend_name == "none");
+    assert_true (engine.next_capture_time_iso == "");
+    assert_true (engine.last_capture_time_iso == "");
+    assert_true (engine.screenshot_permission_ok == true);
+    assert_true (engine.uptime_seconds >= 0);
 
     cleanup_storage ();
 }
 
 void test_get_status_json () {
-    var server = create_test_server ();
+    var engine = create_test_engine ();
 
+    var json_str = engine.get_status_json ();
+    var parser = new Json.Parser ();
     try {
-        var json_str = server.get_status_json ();
-        var parser = new Json.Parser ();
         parser.load_from_data (json_str);
 
         var root = parser.get_root ().get_object ();
@@ -77,7 +77,6 @@ void test_get_status_json () {
         assert_true (root.has_member ("backend"));
         assert_true (root.has_member ("next_capture"));
         assert_true (root.has_member ("last_capture"));
-        assert_true (root.has_member ("pending_uploads"));
         assert_true (root.has_member ("uptime_seconds"));
         assert_true (root.has_member ("screenshot_permission_ok"));
     } catch (Error e) {
@@ -98,13 +97,13 @@ void test_tamper_events_propagated () {
     var tamper_svc = new Vigil.Services.TamperDetectionService (null);
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
 
-    var server = new Vigil.Daemon.DBusServer (
+    var engine = new Vigil.MonitoringEngine (
         screenshot_svc, scheduler_svc,
         storage_svc, heartbeat_svc, tamper_svc, matrix_svc, settings
     );
 
     string? received_type = null;
-    server.tamper_event.connect ((event_type, details) => {
+    engine.tamper_event.connect ((event_type, details) => {
         received_type = event_type;
     });
 
@@ -114,18 +113,9 @@ void test_tamper_events_propagated () {
     assert_true (received_type == "test_event");
 
     // Check it appears in recent_tamper_events
-    var events = server.recent_tamper_events;
+    var events = engine.recent_tamper_events;
     assert_true (events.length == 1);
     assert_true (events[0] == "test_event: test details");
-
-    cleanup_storage ();
-}
-
-void test_pending_upload_count_reflects_storage () {
-    var server = create_test_server ();
-
-    // No pending uploads initially
-    assert_true (server.pending_upload_count == 0);
 
     cleanup_storage ();
 }
@@ -133,11 +123,9 @@ void test_pending_upload_count_reflects_storage () {
 public static int main (string[] args) {
     Test.init (ref args);
 
-    Test.add_func ("/dbus_server/initial_state", test_initial_state);
-    Test.add_func ("/dbus_server/get_status_json", test_get_status_json);
-    Test.add_func ("/dbus_server/tamper_events_propagated", test_tamper_events_propagated);
-    Test.add_func ("/dbus_server/pending_count_reflects_storage",
-        test_pending_upload_count_reflects_storage);
+    Test.add_func ("/monitoring_engine/initial_state", test_initial_state);
+    Test.add_func ("/monitoring_engine/get_status_json", test_get_status_json);
+    Test.add_func ("/monitoring_engine/tamper_events_propagated", test_tamper_events_propagated);
 
     return Test.run ();
 }
