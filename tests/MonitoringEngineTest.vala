@@ -34,7 +34,6 @@ Vigil.MonitoringEngine create_test_engine () {
     var scheduler_svc = new Vigil.Services.SchedulerService ();
     var storage_svc = new Vigil.Services.StorageService (test_storage_dir);
     var matrix_svc = new Vigil.Services.MatrixTransportService ();
-    var heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
     var tamper_svc = new Vigil.Services.TamperDetectionService (null);
 
     // meson test sets GSETTINGS_SCHEMA_DIR and GSETTINGS_BACKEND=memory
@@ -44,7 +43,6 @@ Vigil.MonitoringEngine create_test_engine () {
         screenshot_svc,
         scheduler_svc,
         storage_svc,
-        heartbeat_svc,
         tamper_svc,
         matrix_svc,
         settings
@@ -58,8 +56,6 @@ void test_initial_state () {
     assert_true (engine.active_backend_name == "none");
     assert_true (engine.next_capture_time_iso == "");
     assert_true (engine.last_capture_time_iso == "");
-    assert_true (engine.screenshot_permission_ok == true);
-    assert_true (engine.uptime_seconds >= 0);
 
     cleanup_storage ();
 }
@@ -77,8 +73,6 @@ void test_get_status_json () {
         assert_true (root.has_member ("backend"));
         assert_true (root.has_member ("next_capture"));
         assert_true (root.has_member ("last_capture"));
-        assert_true (root.has_member ("uptime_seconds"));
-        assert_true (root.has_member ("screenshot_permission_ok"));
     } catch (Error e) {
         Test.fail_printf ("get_status_json failed: %s", e.message);
     }
@@ -93,13 +87,12 @@ void test_tamper_events_propagated () {
     setup_storage ();
     var storage_svc = new Vigil.Services.StorageService (test_storage_dir);
     var matrix_svc = new Vigil.Services.MatrixTransportService ();
-    var heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
     var tamper_svc = new Vigil.Services.TamperDetectionService (null);
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
 
     var engine = new Vigil.MonitoringEngine (
         screenshot_svc, scheduler_svc,
-        storage_svc, heartbeat_svc, tamper_svc, matrix_svc, settings
+        storage_svc, tamper_svc, matrix_svc, settings
     );
 
     string? received_type = null;

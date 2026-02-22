@@ -14,13 +14,11 @@ public class Vigil.MonitoringEngine : Object {
     private Vigil.Services.ScreenshotService _screenshot_svc;
     private Vigil.Services.SchedulerService _scheduler_svc;
     private Vigil.Services.StorageService _storage_svc;
-    private Vigil.Services.HeartbeatService _heartbeat_svc;
     private Vigil.Services.TamperDetectionService _tamper_svc;
     private Vigil.Services.MatrixTransportService _matrix_svc;
     private GLib.Settings _settings;
 
     private Queue<string> _recent_tamper_events;
-    private int _cached_pending_count = 0;
     private uint _pending_retry_source = 0;
     private uint _background_portal_source = 0;
     private uint _key_sharing_source = 0;
@@ -55,18 +53,6 @@ public class Vigil.MonitoringEngine : Object {
         }
     }
 
-    public bool screenshot_permission_ok {
-        get {
-            return _heartbeat_svc.screenshot_permission_ok;
-        }
-    }
-
-    public int64 uptime_seconds {
-        get {
-            return _heartbeat_svc.get_uptime_seconds ();
-        }
-    }
-
     public string[] recent_tamper_events {
         owned get {
             var len = _recent_tamper_events.get_length ();
@@ -90,7 +76,6 @@ public class Vigil.MonitoringEngine : Object {
         Vigil.Services.ScreenshotService screenshot_svc,
         Vigil.Services.SchedulerService scheduler_svc,
         Vigil.Services.StorageService storage_svc,
-        Vigil.Services.HeartbeatService heartbeat_svc,
         Vigil.Services.TamperDetectionService tamper_svc,
         Vigil.Services.MatrixTransportService matrix_svc,
         GLib.Settings settings
@@ -98,7 +83,6 @@ public class Vigil.MonitoringEngine : Object {
         _screenshot_svc = screenshot_svc;
         _scheduler_svc = scheduler_svc;
         _storage_svc = storage_svc;
-        _heartbeat_svc = heartbeat_svc;
         _tamper_svc = tamper_svc;
         _matrix_svc = matrix_svc;
         _settings = settings;
@@ -132,12 +116,6 @@ public class Vigil.MonitoringEngine : Object {
 
         builder.set_member_name ("last_capture");
         builder.add_string_value (last_capture_time_iso);
-
-        builder.set_member_name ("uptime_seconds");
-        builder.add_int_value (uptime_seconds);
-
-        builder.set_member_name ("screenshot_permission_ok");
-        builder.add_boolean_value (screenshot_permission_ok);
 
         builder.end_object ();
 
@@ -178,17 +156,6 @@ public class Vigil.MonitoringEngine : Object {
             debug ("Could not subscribe to login1 signals: %s", e.message);
         }
 
-        _heartbeat_svc.lifetime_captures = _storage_svc.lifetime_captures;
-
-        // Collect environment attestation for the first heartbeat
-        try {
-            var binary_path = FileUtils.read_link ("/proc/self/exe");
-            _heartbeat_svc.environment_attestation =
-                Vigil.Services.SecurityUtils.collect_environment_attestation (binary_path);
-        } catch (Error e) {
-            debug ("Could not collect environment attestation: %s", e.message);
-        }
-
         yield _screenshot_svc.initialize ();
 
         apply_settings ();
@@ -201,9 +168,6 @@ public class Vigil.MonitoringEngine : Object {
         // Share room keys with partner (retries until successful)
         schedule_key_sharing ();
 
-        // Start heartbeat
-        _heartbeat_svc.start ();
-
         // Start tamper detection
         _tamper_svc.start ();
 
@@ -215,9 +179,15 @@ public class Vigil.MonitoringEngine : Object {
             start_monitoring ();
         }
 
+        // Load persisted alerts from previous run
+        _tamper_svc.load_persisted_alerts ();
+
         // Upload any pending screenshots from previous sessions
-        refresh_pending_count ();
+
         yield flush_pending_uploads ();
+
+        // Flush any persisted alerts after pending uploads
+        yield _tamper_svc.flush_unsent_alerts ();
 
         // Request background/autostart permission via XDG portal (Flatpak)
         yield request_background_portal ();
@@ -230,14 +200,12 @@ public class Vigil.MonitoringEngine : Object {
     private void start_monitoring () {
         monitoring_active = true;
         _scheduler_svc.start ();
-        _heartbeat_svc.monitoring_active = true;
         status_changed ();
     }
 
     private void stop_monitoring () {
         monitoring_active = false;
         _scheduler_svc.stop ();
-        _heartbeat_svc.monitoring_active = false;
         status_changed ();
     }
 
@@ -257,8 +225,6 @@ public class Vigil.MonitoringEngine : Object {
         });
 
         _screenshot_svc.screenshot_taken.connect ((path) => {
-            _heartbeat_svc.screenshots_since_last++;
-            _heartbeat_svc.lifetime_captures = _storage_svc.lifetime_captures;
             _tamper_svc.report_capture_success ();
             screenshot_captured (path);
             status_changed ();
@@ -270,35 +236,16 @@ public class Vigil.MonitoringEngine : Object {
 
         _tamper_svc.tamper_detected.connect ((event_type, details) => {
             var event_str = "%s: %s".printf (event_type, details);
-            _heartbeat_svc.report_tamper_event (event_str);
             _recent_tamper_events.push_tail (event_str);
             // Keep only last 50 — O(1) pop from head vs O(n) array shift
             if (_recent_tamper_events.get_length () > 50) {
                 _recent_tamper_events.pop_head ();
             }
             tamper_event (event_type, details);
-
-            // Send tamper alerts via Matrix immediately
-            if (_matrix_svc.is_configured) {
-                _matrix_svc.send_alert.begin (event_type, details);
-            }
         });
 
         _storage_svc.will_delete_file.connect ((path) => {
             _tamper_svc.expect_deletion (path);
-        });
-
-        _storage_svc.capture_hashed.connect ((hash) => {
-            _heartbeat_svc.record_capture_hash (hash);
-        });
-
-        _heartbeat_svc.gap_detected.connect ((gap_seconds) => {
-            _tamper_svc.report_warning ("unmonitored_gap",
-                "Device was unmonitored for %lld minutes".printf (gap_seconds / 60));
-        });
-
-        _heartbeat_svc.heartbeat_sent.connect (() => {
-            refresh_pending_count ();
         });
 
         // Listen for monitoring toggle from settings
@@ -315,7 +262,6 @@ public class Vigil.MonitoringEngine : Object {
     private void apply_settings () {
         _scheduler_svc.min_interval_seconds = _settings.get_int ("min-interval-seconds");
         _scheduler_svc.max_interval_seconds = _settings.get_int ("max-interval-seconds");
-        _heartbeat_svc.interval_seconds = _settings.get_int ("heartbeat-interval-seconds");
 
         // Matrix transport settings
         _matrix_svc.homeserver_url = _settings.get_string ("matrix-homeserver-url");
@@ -329,12 +275,12 @@ public class Vigil.MonitoringEngine : Object {
         _tamper_svc.max_capture_interval_seconds = _settings.get_int ("max-interval-seconds");
         _tamper_svc.check_interval_seconds = _settings.get_int ("tamper-check-interval-seconds");
 
-        // Wire up heartbeat data dir for alert persistence
+        // Wire up tamper detection data dir for alert persistence
         var data_dir = Path.build_filename (
             Environment.get_user_data_dir (),
             "io.github.invarianz.vigil"
         );
-        _heartbeat_svc.data_dir = data_dir;
+        _tamper_svc.data_dir = data_dir;
 
         // Derive HMAC key from pickle key for marker integrity
         var pickle_key = _settings.get_string ("e2ee-pickle-key");
@@ -406,8 +352,6 @@ public class Vigil.MonitoringEngine : Object {
             if (!enc.restore_group_session ()) {
                 enc.create_outbound_group_session ();
             }
-            // Wire up encryption for config hash signing in heartbeats
-            _heartbeat_svc.encryption = enc;
             debug ("E2EE (re)initialized from settings (session: %s)", enc.megolm_session_id);
 
             // Share room keys with partner (new session or first init)
@@ -507,7 +451,7 @@ public class Vigil.MonitoringEngine : Object {
                 warning ("Failed to mark screenshot as pending: %s", e.message);
             }
 
-            refresh_pending_count ();
+    
             status_changed ();
             _storage_svc.cleanup_old_screenshots ();
 
@@ -551,7 +495,10 @@ public class Vigil.MonitoringEngine : Object {
                 (owned) file_data, file_path, now);
             if (delivered) {
                 _storage_svc.mark_uploaded (file_path);
-                refresh_pending_count ();
+        
+
+                // Flush any persisted unsent alerts after successful upload
+                yield _tamper_svc.flush_unsent_alerts ();
             } else {
                 // Upload failed — schedule a retry for all pending
                 schedule_pending_retry ();
@@ -618,12 +565,10 @@ public class Vigil.MonitoringEngine : Object {
                 }
             }
         }
-
-        refresh_pending_count ();
-
-        // If any uploads failed, schedule another retry
-        var remaining = _storage_svc.get_pending_screenshots ();
-        if (remaining.length > 0) {
+        // If any uploads failed, schedule another retry.
+        // Use cached pending_count (maintained by mark_uploaded) instead of
+        // re-scanning the directory -- saves one full directory enumeration.
+        if (_storage_svc.pending_count > 0) {
             schedule_pending_retry ();
         }
     }
@@ -647,7 +592,7 @@ public class Vigil.MonitoringEngine : Object {
             bool granted = yield portal.request_background (
                 null,
                 "Vigil needs to run in the background to capture screenshots " +
-                "and send heartbeats to your accountability partner.",
+                "and send them to your accountability partner.",
                 commandline,
                 Xdp.BackgroundFlags.AUTOSTART,
                 null
@@ -684,9 +629,5 @@ public class Vigil.MonitoringEngine : Object {
             });
             return Source.REMOVE;
         });
-    }
-
-    private void refresh_pending_count () {
-        _cached_pending_count = _storage_svc.pending_count;
     }
 }

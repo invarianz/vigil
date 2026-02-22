@@ -38,7 +38,6 @@ Your partner doesn't need any technical knowledge. They just watch for screensho
 - **End-to-end encrypted** -- screenshots are encrypted on your device before upload; the server never sees them
 - **One-click setup** -- enter your account details, click Setup, and Vigil handles login, room creation, and encryption automatically
 - **Tamper detection** -- alerts your partner if Vigil is stopped, settings are changed via dconf, or files are modified. Distinguishes between **tamper attempts** (bold red) and **warnings** (orange) based on severity
-- **Dead man's switch** -- heartbeat messages include a "next check-in by" deadline so your partner knows exactly when to expect the next update
 - **Offline resilience** -- queues screenshots for delivery when offline, retries on reconnect
 - **Settings lock** -- after setup, settings are locked behind a code that only your partner knows
 - **Flatpak sandboxed** -- runs inside a Flatpak sandbox with seccomp, separate PID/mount namespaces, and restricted filesystem access. Detects sandbox escapes
@@ -68,17 +67,17 @@ Click **Setup**. Vigil will log in, create a private encrypted room, invite your
 
 Your partner opens Element and accepts the room invite from Vigil. From now on, they'll receive:
 
-- **Screenshots** -- batches of images delivered every 10 minutes
-- **Heartbeats** -- status messages every 15 minutes with a "next check-in by" deadline
+- **Screenshots** -- images sent every 1-2 minutes
 - **Tamper alerts** -- bold warnings if someone tries to interfere with Vigil
+- **Shutdown notices** -- a message when the computer shuts down or restarts
 
 Your partner only needs to watch for three things:
 
 | What they see | What it means |
 |---|---|
-| Regular messages and screenshots | Everything is working normally |
+| Regular screenshots arriving | Everything is working normally |
 | **TAMPER ALERT** | Something suspicious happened -- investigate |
-| "Next check-in by" deadline passes with no message | Something is wrong (device off, Vigil removed, etc.) |
+| Screenshots stop arriving with no "Going offline" notice | Something is wrong (device off, Vigil removed, etc.) |
 
 ### Step 3: Settings are locked automatically
 
@@ -92,23 +91,7 @@ Switch to the Status tab and enable monitoring. Vigil starts capturing in the ba
 
 ## What your partner sees
 
-Vigil sends messages your partner can understand at a glance -- no technical knowledge needed. Every message starts with a clear status line so your partner knows immediately if something is wrong.
-
-### Normal operation
-
-> STATUS: All clear
->
-> Running for 2 hours 30 minutes.
-> Screenshots taken: 15
-> Waiting to send: 0
->
-> If no new message arrives within 30 minutes, something may be wrong.
->
-> ──────────
-> Verification data (you can ignore this section):
-> seq: 10 | lifetime: 150 | prev: a3b8f1…
-
-This is a regular heartbeat, sent every 15 minutes. The top section tells your partner everything is running smoothly. The verification data below the separator is for forensic purposes -- your partner can safely ignore it.
+Vigil sends messages your partner can understand at a glance -- no technical knowledge needed.
 
 ### Clean shutdown (computer turned off or restarted)
 
@@ -116,34 +99,10 @@ This is a regular heartbeat, sent every 15 minutes. The top section tells your p
 >
 > The computer is shutting down or restarting. This is normal.
 > Vigil will start again automatically when the computer turns back on.
-> You can ignore the deadline from the previous message -- silence is expected until the computer restarts.
 >
-> Was running for 4 hours 12 minutes. 0 screenshots waiting to send.
+> Was running for 4 hours 12 minutes.
 
-When you shut down or restart your computer, Vigil sends this message before it stops. Your partner knows the silence that follows is expected. The message explicitly tells them to ignore the deadline from the previous heartbeat.
-
-### Sleep, wake, and unmonitored gaps
-
-When the computer wakes up after sleep, or comes back after being off, Vigil tells your partner what happened:
-
-> NOTICE: Back online after 8 hours 15 minutes
->
-> Vigil was not monitoring for 8 hours 15 minutes.
-> If you received a "Going offline" message before this gap, it was probably a normal shutdown or sleep.
-> If you did NOT receive a "Going offline" message, this could be suspicious.
-
-Your partner checks: did they see a "Going offline" message before the gap? If yes, it was a normal shutdown or sleep. If no, something suspicious may have happened.
-
-### Network outage
-
-If Vigil can't reach the server, it keeps trying. Once the connection is restored:
-
-> NOTICE: Connection restored
->
-> Vigil was running but could not reach the server. 3 updates were missed.
-> Screenshots taken during the outage are now being sent.
-
-Screenshots taken while offline are queued and delivered as soon as the connection comes back.
+When you shut down or restart your computer, Vigil sends this message before it stops. Your partner knows the silence that follows is expected.
 
 ### Tamper alerts
 
@@ -185,7 +144,7 @@ Here are the types of problems Vigil can detect:
 | Screenshot monitoring was turned off | Monitoring was disabled |
 | Your partner ID was changed or removed | Partner Matrix ID was cleared |
 | Encryption keys were deleted | E2EE pickle key was cleared |
-| Service timer was changed | Heartbeat, upload, or tamper-check interval was set very high |
+| Service timer was changed | Upload or tamper-check interval was set very high |
 | Vigil was stopped or uninstalled | Vigil was manually stopped (not a system shutdown) |
 | Permission to run in the background was revoked | XDG Background portal permission lost |
 | Encryption failed to start | E2EE init failed -- no screenshots will be sent |
@@ -196,25 +155,23 @@ Here are the types of problems Vigil can detect:
 |---|---|
 | No screenshot was taken when expected | Capture may have stalled (portal denied, compositor crash) |
 | Disk space is critically low | Less than 50 MB free |
-| Device was unmonitored for a period | Gap detected (sleep, shutdown, or outage) |
 | Settings unlocked with correct code | Authorized unlock via GUI (partner should verify they gave the code) |
 
-The next heartbeat will also include any alerts that occurred since the last update, so nothing is missed even if an individual alert fails to send.
+Failed alerts are persisted to disk and retried after each successful screenshot upload, so nothing is missed even during network outages.
 
 ### Manual stop or uninstall
 
 If Vigil is stopped with `flatpak kill`, terminated with SIGTERM, or uninstalled, it detects that this was NOT a system shutdown (no `PrepareForShutdown` signal from systemd-logind) and sends a tamper alert (if settings are locked) or warning (if unlocked) before going offline.
 
-If Vigil is killed with `kill -9` or the power is pulled, there is no opportunity to send any message. This is exactly what the deadline handles: the "if no new message arrives within 30 minutes" deadline passes with no message, and your partner knows something is wrong.
+If Vigil is killed with `kill -9` or the power is pulled, there is no opportunity to send any message. Your partner will notice that screenshots have stopped arriving without a "Going offline" notice.
 
 ### What your partner needs to remember
 
-1. **"STATUS: All clear"** = everything is fine
+1. **Screenshots arriving regularly** = everything is fine
 2. **"NOTICE: Going offline"** = computer was turned off normally, expect silence
-3. **"NOTICE: Back online after…"** = computer was off or asleep, check if a "Going offline" message was sent before
-4. **"TAMPER ATTEMPT"** (bold red) = someone is actively trying to circumvent Vigil, investigate immediately
-5. **"Warning"** (orange) = a system issue or legitimate unlocked settings change
-6. **Deadline passes with no message at all** = most serious; Vigil was forcibly stopped
+3. **"TAMPER ATTEMPT"** (bold red) = someone is actively trying to circumvent Vigil, investigate immediately
+4. **"Warning"** (orange) = a system issue or legitimate unlocked settings change
+5. **Screenshots stop with no "Going offline" notice** = most serious; Vigil was forcibly stopped
 
 ## Security and encryption
 

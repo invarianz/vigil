@@ -27,7 +27,6 @@ test_utils = files('TestUtils.vala')
 unit_tests = {
     'SchedulerService': 'SchedulerServiceTest.vala',
     'StorageService': 'StorageServiceTest.vala',
-    'HeartbeatService': 'HeartbeatServiceTest.vala',
     'TamperDetectionService': 'TamperDetectionServiceTest.vala',
     'MatrixTransportService': 'MatrixTransportServiceTest.vala',
     'EncryptionService': 'EncryptionServiceTest.vala',

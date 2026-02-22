@@ -1006,8 +1006,8 @@ public class Vigil.Services.MatrixTransportService : Object {
         }
 
         var raw_event = "%s: %s".printf (event_type, details);
-        var friendly = Vigil.Services.HeartbeatService.describe_tamper_event (raw_event);
-        bool is_warning = Vigil.Services.HeartbeatService.is_warning_event (raw_event);
+        var friendly = Vigil.Services.TamperDetectionService.describe_tamper_event (raw_event);
+        bool is_warning = Vigil.Services.TamperDetectionService.is_warning_event (raw_event);
 
         string plain;
         string html;

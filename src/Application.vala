@@ -16,11 +16,11 @@ public class Vigil.Application : Gtk.Application {
     private Vigil.Services.ScreenshotService _screenshot_svc;
     private Vigil.Services.SchedulerService _scheduler_svc;
     private Vigil.Services.StorageService _storage_svc;
-    private Vigil.Services.HeartbeatService _heartbeat_svc;
     private Vigil.Services.TamperDetectionService _tamper_svc;
     private Vigil.Services.MatrixTransportService _matrix_svc;
     private GLib.Settings _settings;
 
+    private DateTime _start_time;
     private bool _background_mode = false;
 
     public Application () {
@@ -52,6 +52,8 @@ public class Vigil.Application : Gtk.Application {
 
     protected override void startup () {
         base.startup ();
+
+        _start_time = new DateTime.now_local ();
 
         Granite.init ();
 
@@ -138,17 +140,11 @@ public class Vigil.Application : Gtk.Application {
             matrix_svc.encryption = enc_svc;
         }
 
-        _heartbeat_svc = new Vigil.Services.HeartbeatService (matrix_svc);
-        _tamper_svc = new Vigil.Services.TamperDetectionService (settings);
+        _tamper_svc = new Vigil.Services.TamperDetectionService (settings, matrix_svc);
 
         // If E2EE was configured but failed to initialize, fire a tamper
         // alert so the partner knows encryption is broken.
         if (e2ee_expected && !e2ee_ok) {
-            _heartbeat_svc.report_tamper_event (
-                "E2EE initialization failed -- screenshots will NOT be sent " +
-                "until encryption is restored (pickle file may be corrupt " +
-                "or E2EE password may have changed)"
-            );
             _tamper_svc.emit_e2ee_init_failure ();
         }
 
@@ -156,7 +152,6 @@ public class Vigil.Application : Gtk.Application {
             _screenshot_svc,
             _scheduler_svc,
             _storage_svc,
-            _heartbeat_svc,
             _tamper_svc,
             matrix_svc,
             settings
@@ -220,17 +215,31 @@ public class Vigil.Application : Gtk.Application {
         }
 
         // Send "going offline" notice so the partner knows silence is expected
-        if (_heartbeat_svc != null) {
+        if (_matrix_svc != null && _matrix_svc.is_configured) {
+            var now = new DateTime.now_local ();
+            var uptime = now.difference (_start_time) / TimeSpan.SECOND;
+
+            var sb = new StringBuilder ();
+            sb.append ("NOTICE: Going offline\n\n");
+
+            if (system_shutdown) {
+                sb.append ("The computer is shutting down or restarting. This is normal.\n");
+                sb.append ("Vigil will start again automatically when the computer turns back on.\n\n");
+            } else {
+                sb.append ("Vigil was stopped manually (not a system shutdown or restart).\n");
+                sb.append ("If you did not authorize this, investigate immediately.\n\n");
+            }
+
+            sb.append_printf ("Was running for %s.",
+                Vigil.Services.TamperDetectionService.format_duration (uptime));
+
             var loop = new MainLoop (null, false);
-            _heartbeat_svc.send_shutdown_notice.begin (system_shutdown, (obj, res) => {
-                _heartbeat_svc.send_shutdown_notice.end (res);
+            _matrix_svc.send_text_message.begin (sb.str, (obj, res) => {
+                _matrix_svc.send_text_message.end (res);
                 loop.quit ();
             });
-            // Spin for at most 5 seconds, then give up
             Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });
             loop.run ();
-
-            _heartbeat_svc.stop ();
         }
         if (_tamper_svc != null) {
             _tamper_svc.stop ();

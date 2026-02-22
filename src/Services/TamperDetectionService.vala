@@ -6,9 +6,12 @@
 /**
  * Periodically checks system integrity and reports anomalies.
  *
- * Detected events are reported via the tamper_detected signal. The daemon
- * forwards these to the Matrix room so the accountability partner is
- * informed immediately, even when the user is actively tampering.
+ * Detected events are reported via the tamper_detected signal and
+ * immediately forwarded to the Matrix room so the accountability partner
+ * is informed, even when the user is actively tampering.
+ *
+ * Also owns alert persistence: unsent tamper alerts are saved to disk
+ * so they survive daemon restarts and network outages.
  *
  * In addition to periodic checks, this service monitors GSettings
  * reactively -- any change to a critical key triggers an immediate check.
@@ -37,6 +40,9 @@ public class Vigil.Services.TamperDetectionService : Object {
 
     /** Maximum capture interval in seconds (for liveness monitoring). */
     public int max_capture_interval_seconds { get; set; default = 120; }
+
+    /** Data directory for persisting unsent alerts. */
+    public string data_dir { get; set; default = ""; }
 
     /** Monotonic timestamp (usec) of the last successful screenshot capture. */
     private int64 _last_capture_monotonic = 0;
@@ -68,17 +74,28 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** Crypto files seen on disk (for periodic existence checking). */
     private GenericSet<string> _crypto_files_seen;
 
+    /** List of tamper events pending delivery. */
+    private GenericArray<string> _unsent_alerts;
+
+    /** Matrix transport for sending alerts. May be null in tests. */
+    private Vigil.Services.MatrixTransportService? _matrix_svc;
+
     /**
      * Create a TamperDetectionService.
      *
      * @param settings Optional GLib.Settings instance. When null,
      *                 settings-based checks are skipped (useful in tests).
+     * @param matrix_svc Optional Matrix transport for sending alerts.
+     *                   When null, alerts are persisted but not sent.
      */
-    public TamperDetectionService (GLib.Settings? settings = null) {
+    public TamperDetectionService (GLib.Settings? settings = null,
+                                   Vigil.Services.MatrixTransportService? matrix_svc = null) {
         _settings = settings;
+        _matrix_svc = matrix_svc;
         _expected_deletions = new GenericSet<string> (str_hash, str_equal);
         _crypto_files_seen = new GenericSet<string> (str_hash, str_equal);
         _monitors = new GenericArray<FileMonitor> ();
+        _unsent_alerts = new GenericArray<string> ();
 
         if (_settings != null) {
             connect_settings_signals ();
@@ -181,6 +198,19 @@ public class Vigil.Services.TamperDetectionService : Object {
         }
 
         try {
+            // Preload all marker names into a HashSet (one directory scan)
+            // instead of N stat() calls — O(1) lookup per screenshot.
+            var marker_names = new GenericSet<string> (str_hash, str_equal);
+            if (FileUtils.test (pending_dir, FileTest.IS_DIR)) {
+                var pdir = File.new_for_path (pending_dir);
+                var penum = pdir.enumerate_children (
+                    "standard::name", FileQueryInfoFlags.NONE, null);
+                FileInfo? pinfo;
+                while ((pinfo = penum.next_file (null)) != null) {
+                    marker_names.add (pinfo.get_name ());
+                }
+            }
+
             var dir = File.new_for_path (screenshots_dir);
             var enumerator = dir.enumerate_children (
                 "standard::name",
@@ -196,9 +226,7 @@ public class Vigil.Services.TamperDetectionService : Object {
                     continue;
                 }
 
-                // Check if a pending marker exists for this file
-                var marker_path = Path.build_filename (pending_dir, name + ".pending");
-                if (!FileUtils.test (marker_path, FileTest.EXISTS)) {
+                if (!marker_names.contains (name + ".pending")) {
                     orphan_count++;
                 }
             }
@@ -278,14 +306,8 @@ public class Vigil.Services.TamperDetectionService : Object {
         }
 
         // Check if service timers have been set dangerously high.
-        // Heartbeat > 1 hour, upload batch > 1 hour, tamper check > 30 min
-        // are all far beyond the defaults and indicate intentional tampering.
-        int heartbeat_interval = _settings.get_int ("heartbeat-interval-seconds");
-        if (heartbeat_interval >= 3600) {
-            emit_lock_dependent (locked, "timer_tampered",
-                "Heartbeat interval set to %d seconds (>= 1 hour)".printf (heartbeat_interval));
-        }
-
+        // Upload batch > 1 hour, tamper check > 30 min are far beyond the
+        // defaults and indicate intentional tampering.
         int upload_batch_interval = _settings.get_int ("upload-batch-interval-seconds");
         if (upload_batch_interval >= 3600) {
             emit_lock_dependent (locked, "timer_tampered",
@@ -386,7 +408,6 @@ public class Vigil.Services.TamperDetectionService : Object {
             "e2ee-pickle-key",
             "settings-locked",
             "unlock-code-hash",
-            "heartbeat-interval-seconds",
             "upload-batch-interval-seconds",
             "tamper-check-interval-seconds",
             "partner-matrix-id",
@@ -600,12 +621,26 @@ public class Vigil.Services.TamperDetectionService : Object {
 
     private void emit_tamper (string event_type, string details) {
         debug ("Tamper detected [%s]: %s", event_type, details);
+        var event_str = "%s: %s".printf (event_type, details);
+        _unsent_alerts.add (event_str);
+        persist_unsent_alerts ();
         tamper_detected (event_type, details);
+
+        if (_matrix_svc != null && _matrix_svc.is_configured) {
+            _matrix_svc.send_alert.begin (event_type, details);
+        }
     }
 
     private void emit_warning (string event_type, string details) {
         debug ("Warning [%s]: %s", event_type, details);
+        var event_str = "~%s: %s".printf (event_type, details);
+        _unsent_alerts.add (event_str);
+        persist_unsent_alerts ();
         tamper_detected ("~" + event_type, details);
+
+        if (_matrix_svc != null && _matrix_svc.is_configured) {
+            _matrix_svc.send_alert.begin ("~" + event_type, details);
+        }
     }
 
     /** Emit tamper when locked, warning when unlocked. */
@@ -627,8 +662,255 @@ public class Vigil.Services.TamperDetectionService : Object {
         emit_warning (event_type, details);
     }
 
-    private int get_jittered_interval () {
-        return SecurityUtils.jittered_interval (check_interval_seconds);
+    // ──────────────────────────────────────────────────────────
+    //  Alert persistence
+    // ──────────────────────────────────────────────────────────
+
+    /**
+     * Retry delivery of persisted unsent alerts.
+     *
+     * Called after successful screenshot uploads. Sends each alert via
+     * the Matrix transport and clears the file on success.
+     */
+    public async void flush_unsent_alerts () {
+        if (_matrix_svc == null || !_matrix_svc.is_configured) {
+            return;
+        }
+
+        if (_unsent_alerts.length == 0) {
+            return;
+        }
+
+        bool all_sent = true;
+        for (int i = 0; i < _unsent_alerts.length; i++) {
+            var raw = _unsent_alerts[i];
+            var colon_pos = raw.index_of (": ");
+            string event_type;
+            string details;
+            if (colon_pos >= 0) {
+                event_type = raw.substring (0, colon_pos);
+                details = raw.substring (colon_pos + 2);
+            } else {
+                event_type = raw;
+                details = raw;
+            }
+
+            bool sent = yield _matrix_svc.send_alert (event_type, details);
+            if (!sent) {
+                all_sent = false;
+                break;
+            }
+        }
+
+        if (all_sent) {
+            _unsent_alerts.remove_range (0, _unsent_alerts.length);
+            clear_persisted_alerts ();
+        }
+    }
+
+    /**
+     * Load persisted alerts from a previous run.
+     * Called on startup to restore unsent alerts.
+     */
+    public void load_persisted_alerts () {
+        if (data_dir == "") {
+            return;
+        }
+
+        var path = Path.build_filename (data_dir, "unsent_alerts.txt");
+        if (!FileUtils.test (path, FileTest.EXISTS)) {
+            return;
+        }
+
+        try {
+            string contents;
+            FileUtils.get_contents (path, out contents);
+            var lines = contents.split ("\n");
+            foreach (var line in lines) {
+                var stripped = line.strip ();
+                if (stripped != "") {
+                    _unsent_alerts.add (stripped);
+                }
+            }
+            if (_unsent_alerts.length > 0) {
+                debug ("Loaded %d persisted tamper alerts from previous run",
+                    (int) _unsent_alerts.length);
+            }
+        } catch (Error e) {
+            debug ("Failed to load persisted alerts: %s", e.message);
+        }
+    }
+
+    /**
+     * Persist unsent tamper alerts to disk so they survive daemon restarts.
+     */
+    private void persist_unsent_alerts () {
+        if (data_dir == "" || _unsent_alerts.length == 0) {
+            return;
+        }
+
+        var path = Path.build_filename (data_dir, "unsent_alerts.txt");
+        var sb = new StringBuilder ();
+        for (int i = 0; i < _unsent_alerts.length; i++) {
+            sb.append (_unsent_alerts[i]);
+            sb.append_c ('\n');
+        }
+
+        try {
+            FileUtils.set_contents (path, sb.str);
+            FileUtils.chmod (path, 0600);
+        } catch (Error e) {
+            debug ("Failed to persist unsent alerts: %s", e.message);
+        }
+    }
+
+    /**
+     * Clear persisted alerts after successful delivery.
+     */
+    private void clear_persisted_alerts () {
+        if (data_dir == "") {
+            return;
+        }
+
+        var path = Path.build_filename (data_dir, "unsent_alerts.txt");
+        if (FileUtils.test (path, FileTest.EXISTS)) {
+            FileUtils.remove (path);
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  Static event description helpers
+    // ──────────────────────────────────────────────────────────
+
+    /**
+     * Check whether a raw event string represents a warning (not a tamper attempt).
+     *
+     * Warning events are prefixed with "~" to indicate they are system issues
+     * or legitimate setting changes, not active tampering.
+     */
+    public static bool is_warning_event (string raw_event) {
+        return raw_event.has_prefix ("~");
+    }
+
+    /**
+     * Translate a raw tamper event string into plain language.
+     *
+     * Raw events use "event_type: technical details" format. This method
+     * replaces them with descriptions a non-technical person can understand.
+     */
+    public static string describe_tamper_event (string raw_event) {
+        var colon_pos = raw_event.index_of (": ");
+        if (colon_pos < 0) {
+            return raw_event;
+        }
+
+        var event_type = raw_event.substring (0, colon_pos);
+        // Strip warning prefix before lookup
+        if (event_type.has_prefix ("~")) {
+            event_type = event_type.substring (1);
+        }
+
+        switch (event_type) {
+            case "monitoring_disabled":
+                return "Screenshot monitoring was turned off. " +
+                    "No screenshots are being taken.";
+            case "interval_tampered":
+                return "Screenshot timing was changed to take very " +
+                    "few screenshots. Long gaps between screenshots " +
+                    "mean activity is going unmonitored.";
+            case "timer_tampered":
+                return "A service timer was changed to a very " +
+                    "long interval. Problems will be detected much slower.";
+            case "matrix_cleared":
+                return "All connection settings were deleted. " +
+                    "Vigil can no longer send you messages or screenshots.";
+            case "matrix_incomplete":
+                return "Some connection settings were deleted. " +
+                    "Vigil\u2019s connection to you is broken \u2014 " +
+                    "you will NOT receive screenshots or updates " +
+                    "until this is fixed.";
+            case "partner_changed":
+                return "Your partner ID was removed from the settings. " +
+                    "Messages and screenshots will no longer be sent to you.";
+            case "e2ee_disabled":
+                return "Encryption keys were deleted. " +
+                    "Screenshots cannot be sent securely.";
+            case "settings_unlocked":
+                return "The settings lock was bypassed without " +
+                    "the unlock code.";
+            case "unlock_code_cleared":
+                return "The unlock code was erased while settings " +
+                    "are locked. Someone is trying to bypass " +
+                    "the settings lock.";
+            case "capture_stalled":
+                return "No screenshot has been taken when expected. " +
+                    "The screenshot system has stopped working \u2014 " +
+                    "activity is NOT being monitored.";
+            case "orphan_screenshots":
+                return "Upload markers were deleted to prevent " +
+                    "screenshots from being sent to you.";
+            case "disk_space_low":
+                return "The device is almost out of storage space. " +
+                    "New screenshots cannot be saved.";
+            case "screenshot_tampered":
+                return "A screenshot was modified after it was taken. " +
+                    "Someone edited it before it was sent to you.";
+            case "capture_counter_tampered":
+                return "The screenshot counter was tampered with. " +
+                    "Someone is trying to hide how many screenshots " +
+                    "were taken.";
+            case "e2ee_init_failed":
+                return "Encryption failed to start. Screenshots are saved " +
+                    "locally and will be sent once encryption recovers.";
+            case "background_permission_revoked":
+                return "Permission for Vigil to run in the background " +
+                    "was revoked. Vigil will stop running when the " +
+                    "window is closed and will NOT restart automatically.";
+            case "screenshot_deleted":
+                return "A screenshot was deleted before it could be " +
+                    "sent to you. Someone is destroying evidence.";
+            case "marker_deleted":
+                return "An upload marker was deleted to prevent " +
+                    "a screenshot from being sent to you.";
+            case "crypto_file_tampered":
+                return "An encryption file was deleted. Encrypted " +
+                    "communication with you is broken.";
+            case "sandbox_escaped":
+                return "Vigil is running outside its Flatpak sandbox. " +
+                    "All security protections are bypassed \u2014 " +
+                    "screenshots and encryption cannot be trusted.";
+            case "process_stopped":
+                return "Vigil was stopped or uninstalled. " +
+                    "This was NOT a system shutdown \u2014 " +
+                    "someone manually stopped Vigil.";
+            default:
+                return raw_event;
+        }
+    }
+
+    /**
+     * Format a duration in seconds as human-readable text.
+     *
+     * Examples: "less than a minute", "5 minutes", "2 hours 30 minutes"
+     */
+    public static string format_duration (int64 total_seconds) {
+        var hours = total_seconds / 3600;
+        var minutes = (total_seconds % 3600) / 60;
+
+        if (hours == 0 && minutes == 0) {
+            return "less than a minute";
+        }
+        if (hours == 0) {
+            return "%lld %s".printf (
+                minutes, minutes == 1 ? "minute" : "minutes");
+        }
+        if (minutes == 0) {
+            return "%lld %s".printf (
+                hours, hours == 1 ? "hour" : "hours");
+        }
+        return "%lld %s %lld %s".printf (
+            hours, hours == 1 ? "hour" : "hours",
+            minutes, minutes == 1 ? "minute" : "minutes");
     }
 
     private void schedule_next () {
@@ -636,7 +918,7 @@ public class Vigil.Services.TamperDetectionService : Object {
             return;
         }
 
-        var interval = get_jittered_interval ();
+        var interval = SecurityUtils.jittered_interval (check_interval_seconds);
         _timeout_source = Timeout.add_seconds ((uint) interval, () => {
             _timeout_source = 0;
             run_all_checks ();

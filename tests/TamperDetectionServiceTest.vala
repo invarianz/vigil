@@ -350,40 +350,6 @@ void test_settings_lock_no_tamper_when_properly_locked () {
     settings.set_string ("unlock-code-hash", "");
 }
 
-void test_heartbeat_interval_tampered () {
-    var settings = new GLib.Settings ("io.github.invarianz.vigil");
-    settings.set_boolean ("monitoring-enabled", true);
-    settings.set_int ("min-interval-seconds", 30);
-    settings.set_int ("max-interval-seconds", 120);
-    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
-    settings.set_string ("matrix-access-token", "test-token");
-    settings.set_string ("matrix-room-id", "!room:test");
-    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
-    settings.set_int ("heartbeat-interval-seconds", 7200);
-    settings.set_boolean ("settings-locked", true);
-    settings.set_string ("unlock-code-hash", "test-hash");
-
-    var svc = new Vigil.Services.TamperDetectionService (settings);
-
-    GenericArray<string> events = new GenericArray<string> ();
-    svc.tamper_detected.connect ((t, d) => {
-        events.add (t);
-    });
-
-    svc.check_settings_sanity ();
-
-    bool found = false;
-    for (int i = 0; i < events.length; i++) {
-        if (events[i] == "timer_tampered") found = true;
-    }
-    assert_true (found);
-
-    // Reset
-    settings.set_int ("heartbeat-interval-seconds", 900);
-    settings.set_boolean ("settings-locked", false);
-    settings.set_string ("unlock-code-hash", "");
-}
-
 void test_upload_batch_interval_tampered () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
@@ -906,7 +872,6 @@ void test_settings_exact_boundary_triggers_tamper () {
     // Set values outside valid bounds (both below floor and above ceiling)
     settings.set_int ("min-interval-seconds", 10);
     settings.set_int ("max-interval-seconds", 300);
-    settings.set_int ("heartbeat-interval-seconds", 3600);
     settings.set_int ("upload-batch-interval-seconds", 3600);
     settings.set_int ("tamper-check-interval-seconds", 1800);
 
@@ -919,7 +884,7 @@ void test_settings_exact_boundary_triggers_tamper () {
 
     svc.check_settings_sanity ();
 
-    // All five boundary values should trigger as tamper (locked)
+    // All four boundary values should trigger as tamper (locked)
     int interval_count = 0;
     int timer_count = 0;
     for (int i = 0; i < events.length; i++) {
@@ -927,12 +892,11 @@ void test_settings_exact_boundary_triggers_tamper () {
         if (events[i] == "timer_tampered") timer_count++;
     }
     assert_true (interval_count == 2); // min + max
-    assert_true (timer_count == 3);    // heartbeat + upload + tamper
+    assert_true (timer_count == 2);    // upload + tamper
 
     // Reset
     settings.set_int ("min-interval-seconds", 30);
     settings.set_int ("max-interval-seconds", 120);
-    settings.set_int ("heartbeat-interval-seconds", 900);
     settings.set_int ("upload-batch-interval-seconds", 600);
     settings.set_int ("tamper-check-interval-seconds", 120);
     settings.set_boolean ("settings-locked", false);
@@ -949,6 +913,172 @@ void test_warning_report_method () {
 
     svc.report_warning ("test_event", "some details");
     assert_true (event_type == "~test_event");
+}
+
+// ──────────────────────────────────────────────────────────
+//  Event description tests (moved from HeartbeatServiceTest)
+// ──────────────────────────────────────────────────────────
+
+void test_describe_tamper_event_known () {
+    var result = Vigil.Services.TamperDetectionService.describe_tamper_event (
+        "settings_unlocked: lock was disabled");
+    assert_true (result.contains ("settings lock was bypassed"));
+
+    result = Vigil.Services.TamperDetectionService.describe_tamper_event (
+        "crypto_file_tampered: Crypto file account.pickle was deleted");
+    assert_true (result.contains ("encryption file was deleted"));
+}
+
+void test_describe_tamper_event_unknown () {
+    var raw = "unknown_event: some details";
+    var result = Vigil.Services.TamperDetectionService.describe_tamper_event (raw);
+    assert_true (result == raw);
+}
+
+void test_describe_tamper_event_no_colon () {
+    var raw = "bare event without colon separator";
+    var result = Vigil.Services.TamperDetectionService.describe_tamper_event (raw);
+    assert_true (result == raw);
+}
+
+void test_describe_process_stopped () {
+    var result = Vigil.Services.TamperDetectionService.describe_tamper_event (
+        "process_stopped: Vigil was stopped without a system shutdown");
+    assert_true (result.contains ("stopped or uninstalled"));
+    assert_true (result.contains ("NOT a system shutdown"));
+
+    // Also works with warning prefix
+    var result2 = Vigil.Services.TamperDetectionService.describe_tamper_event (
+        "~process_stopped: Vigil was stopped without a system shutdown");
+    assert_true (result2.contains ("stopped or uninstalled"));
+}
+
+void test_describe_strips_warning_prefix () {
+    var result = Vigil.Services.TamperDetectionService.describe_tamper_event (
+        "~monitoring_disabled: Monitoring has been disabled via settings");
+    assert_true (result.contains ("Screenshot monitoring was turned off"));
+
+    result = Vigil.Services.TamperDetectionService.describe_tamper_event (
+        "~capture_stalled: No screenshot captured in 300 seconds");
+    assert_true (result.contains ("screenshot system has stopped working"));
+}
+
+void test_is_warning_event () {
+    assert_true (Vigil.Services.TamperDetectionService.is_warning_event (
+        "~monitoring_disabled: Monitoring has been disabled"));
+    assert_true (Vigil.Services.TamperDetectionService.is_warning_event (
+        "~capture_stalled: No screenshot"));
+    assert_false (Vigil.Services.TamperDetectionService.is_warning_event (
+        "settings_unlocked: lock bypassed"));
+    assert_false (Vigil.Services.TamperDetectionService.is_warning_event (
+        "settings_unlocked: bypassed"));
+}
+
+void test_format_duration () {
+    assert_true (Vigil.Services.TamperDetectionService.format_duration (0) ==
+        "less than a minute");
+    assert_true (Vigil.Services.TamperDetectionService.format_duration (30) ==
+        "less than a minute");
+    assert_true (Vigil.Services.TamperDetectionService.format_duration (60) ==
+        "1 minute");
+    assert_true (Vigil.Services.TamperDetectionService.format_duration (300) ==
+        "5 minutes");
+    assert_true (Vigil.Services.TamperDetectionService.format_duration (3600) ==
+        "1 hour");
+    assert_true (Vigil.Services.TamperDetectionService.format_duration (7200) ==
+        "2 hours");
+    assert_true (Vigil.Services.TamperDetectionService.format_duration (5400) ==
+        "1 hour 30 minutes");
+    assert_true (Vigil.Services.TamperDetectionService.format_duration (3660) ==
+        "1 hour 1 minute");
+}
+
+// ──────────────────────────────────────────────────────────
+//  Alert persistence tests (moved from HeartbeatServiceTest)
+// ──────────────────────────────────────────────────────────
+
+void test_report_tamper_event_persistence () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.data_dir = dir;
+
+    svc.report_tamper ("test_event_1", "details one");
+    svc.report_tamper ("test_event_2", "details two");
+
+    // Events should be persisted to disk
+    var alerts_path = Path.build_filename (dir, "unsent_alerts.txt");
+    assert_true (FileUtils.test (alerts_path, FileTest.EXISTS));
+
+    try {
+        string contents;
+        FileUtils.get_contents (alerts_path, out contents);
+        assert_true (contents.contains ("test_event_1: details one"));
+        assert_true (contents.contains ("test_event_2: details two"));
+    } catch (Error e) {
+        assert_not_reached ();
+    }
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_alert_persistence () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.data_dir = dir;
+
+    // Report events -- should be persisted to file
+    svc.report_tamper ("test_event_1", "details one");
+    svc.report_tamper ("test_event_2", "details two");
+
+    var alerts_path = Path.build_filename (dir, "unsent_alerts.txt");
+    assert_true (FileUtils.test (alerts_path, FileTest.EXISTS));
+
+    // Load in a new service instance to verify persistence
+    var svc2 = new Vigil.Services.TamperDetectionService (null);
+    svc2.data_dir = dir;
+    svc2.load_persisted_alerts ();
+
+    // Flush without matrix should be a no-op (events stay)
+    var loop = new MainLoop ();
+    svc2.flush_unsent_alerts.begin ((obj, res) => {
+        svc2.flush_unsent_alerts.end (res);
+        loop.quit ();
+    });
+    Timeout.add (100, () => { loop.quit (); return Source.REMOVE; });
+    loop.run ();
+
+    // File should still exist since flush couldn't send
+    assert_true (FileUtils.test (alerts_path, FileTest.EXISTS));
+
+    TestUtils.delete_directory_recursive (dir);
+}
+
+void test_flush_unsent_alerts () {
+    var dir = TestUtils.make_test_dir ();
+    DirUtils.create_with_parents (dir, 0755);
+
+    // Without a Matrix service, flush should be a no-op
+    var svc = new Vigil.Services.TamperDetectionService (null);
+    svc.data_dir = dir;
+    svc.report_tamper ("event_1", "details");
+
+    var loop = new MainLoop ();
+    svc.flush_unsent_alerts.begin ((obj, res) => {
+        svc.flush_unsent_alerts.end (res);
+        loop.quit ();
+    });
+    Timeout.add (100, () => { loop.quit (); return Source.REMOVE; });
+    loop.run ();
+
+    // Alerts file should still exist (no matrix to send through)
+    var alerts_path = Path.build_filename (dir, "unsent_alerts.txt");
+    assert_true (FileUtils.test (alerts_path, FileTest.EXISTS));
+
+    TestUtils.delete_directory_recursive (dir);
 }
 
 public static int main (string[] args) {
@@ -971,7 +1101,6 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/lock_authorized_unlock", test_settings_lock_authorized_unlock);
     Test.add_func ("/tamper/lock_hash_cleared", test_settings_lock_hash_cleared_detected);
     Test.add_func ("/tamper/lock_properly_locked", test_settings_lock_no_tamper_when_properly_locked);
-    Test.add_func ("/tamper/heartbeat_interval_tampered", test_heartbeat_interval_tampered);
     Test.add_func ("/tamper/upload_batch_interval_tampered", test_upload_batch_interval_tampered);
     Test.add_func ("/tamper/tamper_check_interval_tampered", test_tamper_check_interval_tampered);
     Test.add_func ("/tamper/partner_id_cleared_locked", test_partner_id_cleared_locked);
@@ -1010,6 +1139,26 @@ public static int main (string[] args) {
         test_settings_exact_boundary_triggers_tamper);
     Test.add_func ("/tamper/warning_report_method",
         test_warning_report_method);
+    Test.add_func ("/tamper/describe_tamper_known",
+        test_describe_tamper_event_known);
+    Test.add_func ("/tamper/describe_tamper_unknown",
+        test_describe_tamper_event_unknown);
+    Test.add_func ("/tamper/describe_tamper_no_colon",
+        test_describe_tamper_event_no_colon);
+    Test.add_func ("/tamper/describe_process_stopped",
+        test_describe_process_stopped);
+    Test.add_func ("/tamper/describe_strips_warning_prefix",
+        test_describe_strips_warning_prefix);
+    Test.add_func ("/tamper/is_warning_event",
+        test_is_warning_event);
+    Test.add_func ("/tamper/format_duration",
+        test_format_duration);
+    Test.add_func ("/tamper/report_tamper_event_persistence",
+        test_report_tamper_event_persistence);
+    Test.add_func ("/tamper/alert_persistence",
+        test_alert_persistence);
+    Test.add_func ("/tamper/flush_unsent_alerts",
+        test_flush_unsent_alerts);
 
     return Test.run ();
 }
