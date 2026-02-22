@@ -74,16 +74,6 @@ public class Vigil.Services.SecurityUtils : Object {
     }
 
     /**
-     * Reset cached directory paths.
-     *
-     * Only needed in tests that override XDG_DATA_HOME between calls.
-     */
-    public static void reset_cached_paths () {
-        _cached_app_data_dir = null;
-        _cached_crypto_dir = null;
-    }
-
-    /**
      * Read a random uint32 from a cached /dev/urandom fd (CSPRNG).
      *
      * Aborts on failure -- falling back to a weak PRNG would silently
@@ -227,65 +217,6 @@ public class Vigil.Services.SecurityUtils : Object {
         }
     }
 
-    /**
-     * Collect startup environment attestation for the first heartbeat.
-     *
-     * Returns a compact multi-field string describing the runtime
-     * environment so the partner can verify where the daemon is running.
-     */
-    public static string collect_environment_attestation (string binary_path) {
-        var sb = new StringBuilder ();
-
-        // Hostname
-        sb.append_printf ("host: %s", Environment.get_host_name ());
-
-        // Binary path (shows Flatpak vs system install vs dev build)
-        sb.append_printf (" | binary: %s", binary_path);
-
-        sb.append_printf (" | flatpak: yes");
-
-        // Container detection (docker/lxc/podman via cgroup)
-        string container = "none";
-        try {
-            string cgroup_contents;
-            FileUtils.get_contents ("/proc/self/cgroup", out cgroup_contents);
-            var lower = cgroup_contents.down ();
-            if (lower.contains ("docker") || lower.contains ("lxc") || lower.contains ("podman")) {
-                container = "detected";
-            }
-        } catch (Error e) {
-            // Not available -- leave as "none"
-        }
-        sb.append_printf (" | container: %s", container);
-
-        // PID namespace detection (NSpid in /proc/self/status)
-        string pidns = "unknown";
-        try {
-            string status_contents;
-            FileUtils.get_contents ("/proc/self/status", out status_contents);
-            foreach (var line in status_contents.split ("\n")) {
-                if (line.has_prefix ("NSpid:")) {
-                    var parts = line.substring (6).strip ().split ("\t");
-                    pidns = parts.length > 1 ? "nested" : "root";
-                    break;
-                }
-            }
-        } catch (Error e) {
-            // Not available
-        }
-        sb.append_printf (" | pidns: %s", pidns);
-
-        // Mount namespace ID
-        string mntns = "unknown";
-        try {
-            mntns = FileUtils.read_link ("/proc/self/ns/mnt");
-        } catch (Error e) {
-            // Not available
-        }
-        sb.append_printf (" | mntns: %s", mntns);
-
-        return sb.str;
-    }
 
     /**
      * Compute a jittered interval for unpredictable scheduling.

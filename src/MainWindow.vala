@@ -83,7 +83,7 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
 
         close_request.connect (() => {
             settings.set_boolean ("window-maximized", maximized);
-            hide ();
+            visible = false;
             return true; // prevent destruction — process stays alive via hold()
         });
 

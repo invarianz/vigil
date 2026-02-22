@@ -96,13 +96,6 @@ public class Vigil.MonitoringEngine : Object {
     }
 
     /**
-     * Request an immediate screenshot capture.
-     */
-    public async void request_capture () {
-        yield handle_capture ();
-    }
-
-    /**
      * Get a JSON blob with the full engine status.
      */
     public string get_status_json () {
@@ -250,16 +243,14 @@ public class Vigil.MonitoringEngine : Object {
         }
     }
 
-    private void send_sleep_notice () {
+    /**
+     * Send a green notice synchronously (blocks up to 5s for delivery).
+     * Used for shutdown/sleep notices where the process may exit soon.
+     */
+    private void send_blocking_notice (string text) {
         if (_matrix_svc == null || !_matrix_svc.is_configured) {
             return;
         }
-
-        var uptime_sec = (GLib.get_monotonic_time () - _start_monotonic) / 1000000;
-        var uptime_str = Vigil.Services.TamperDetectionService.format_duration (uptime_sec);
-        var text = "Going to sleep — computer is entering sleep/hibernate.\n" +
-            "Vigil will resume when the computer wakes up.\n" +
-            "Was running for %s.".printf (uptime_str);
 
         var loop = new MainLoop (null, false);
         _matrix_svc.send_notice.begin (text, "#28a745", (obj, res) => {
@@ -268,41 +259,32 @@ public class Vigil.MonitoringEngine : Object {
         });
         Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });
         loop.run ();
+    }
+
+    private void send_sleep_notice () {
+        var uptime_sec = (GLib.get_monotonic_time () - _start_monotonic) / 1000000;
+        var uptime_str = Vigil.Services.TamperDetectionService.format_duration (uptime_sec);
+        send_blocking_notice (
+            "Going to sleep — computer is entering sleep/hibernate.\n" +
+            "Vigil will resume when the computer wakes up.\n" +
+            "Was running for %s.".printf (uptime_str));
+    }
+
+    private void send_shutdown_notice () {
+        var uptime_sec = (GLib.get_monotonic_time () - _start_monotonic) / 1000000;
+        var uptime_str = Vigil.Services.TamperDetectionService.format_duration (uptime_sec);
+        send_blocking_notice (
+            "Going offline — computer is shutting down.\n" +
+            "Vigil will start again automatically.\n" +
+            "Was running for %s.".printf (uptime_str));
     }
 
     private void send_online_notice (string reason = "Vigil started.") {
         if (_matrix_svc == null || !_matrix_svc.is_configured) {
             return;
         }
-
-        var text = "Vigil is online — %s".printf (reason);
-
-        _matrix_svc.send_notice.begin (text, "#28a745");
-    }
-
-    /**
-     * Send the "going offline" notice immediately when PrepareForShutdown
-     * arrives, while the network is still up. By the time shutdown() runs,
-     * systemd may have already torn down the network stack.
-     */
-    private void send_shutdown_notice () {
-        if (_matrix_svc == null || !_matrix_svc.is_configured) {
-            return;
-        }
-
-        var uptime_sec = (GLib.get_monotonic_time () - _start_monotonic) / 1000000;
-        var uptime_str = Vigil.Services.TamperDetectionService.format_duration (uptime_sec);
-        var text = "Going offline — computer is shutting down.\n" +
-            "Vigil will start again automatically.\n" +
-            "Was running for %s.".printf (uptime_str);
-
-        var loop = new MainLoop (null, false);
-        _matrix_svc.send_notice.begin (text, "#28a745", (obj, res) => {
-            _matrix_svc.send_notice.end (res);
-            loop.quit ();
-        });
-        Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });
-        loop.run ();
+        _matrix_svc.send_notice.begin (
+            "Vigil is online — %s".printf (reason), "#28a745");
     }
 
     private void connect_signals () {
@@ -360,7 +342,6 @@ public class Vigil.MonitoringEngine : Object {
         _tamper_svc.pending_dir = _storage_svc.pending_dir;
         _tamper_svc.crypto_dir = Vigil.Services.SecurityUtils.get_crypto_dir ();
         _tamper_svc.max_capture_interval_seconds = _settings.get_int ("max-interval-seconds");
-        _tamper_svc.check_interval_seconds = _settings.get_int ("tamper-check-interval-seconds");
 
         // Wire up tamper detection data dir for alert persistence
         var data_dir = Path.build_filename (
@@ -711,8 +692,7 @@ public class Vigil.MonitoringEngine : Object {
      * Uses the same jittered interval approach as tamper detection.
      */
     private void schedule_background_portal_check () {
-        int base_interval = _settings.get_int ("tamper-check-interval-seconds");
-        int interval = Vigil.Services.SecurityUtils.jittered_interval (base_interval);
+        int interval = Vigil.Services.SecurityUtils.jittered_interval (120);
 
         _background_portal_source = Timeout.add_seconds ((uint) interval, () => {
             _background_portal_source = 0;

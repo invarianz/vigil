@@ -24,7 +24,7 @@ public class Vigil.Services.TamperDetectionService : Object {
     public signal void tamper_detected (string event_type, string details);
 
     /** How often to run checks, in seconds (base interval before jitter). */
-    public int check_interval_seconds { get; set; default = 120; }
+    private const int CHECK_INTERVAL_SECONDS = 120;
 
     /** Whether the detection loop is running. */
     public bool is_running { get; private set; default = false; }
@@ -305,21 +305,6 @@ public class Vigil.Services.TamperDetectionService : Object {
             }
         }
 
-        // Check if service timers have been set dangerously high.
-        // Upload batch > 1 hour, tamper check > 30 min are far beyond the
-        // defaults and indicate intentional tampering.
-        int upload_batch_interval = _settings.get_int ("upload-batch-interval-seconds");
-        if (upload_batch_interval >= 3600) {
-            emit_lock_dependent (locked, "timer_tampered",
-                "Upload batch interval set to %d seconds (>= 1 hour)".printf (upload_batch_interval));
-        }
-
-        int tamper_check_interval = _settings.get_int ("tamper-check-interval-seconds");
-        if (tamper_check_interval >= 1800) {
-            emit_lock_dependent (locked, "timer_tampered",
-                "Tamper check interval set to %d seconds (>= 30 min)".printf (tamper_check_interval));
-        }
-
         // Check if partner Matrix ID was changed or cleared
         string partner_id = _settings.get_string ("partner-matrix-id");
         if (hs_url != "" && token != "" && room_id != "" && partner_id == "") {
@@ -408,8 +393,6 @@ public class Vigil.Services.TamperDetectionService : Object {
             "e2ee-pickle-key",
             "settings-locked",
             "unlock-code-hash",
-            "upload-batch-interval-seconds",
-            "tamper-check-interval-seconds",
             "partner-matrix-id",
             "background-portal-granted"
         };
@@ -614,36 +597,28 @@ public class Vigil.Services.TamperDetectionService : Object {
     }
 
     private void emit_tamper (string event_type, string details) {
-        var event_str = "%s: %s".printf (event_type, details);
-        if (has_unsent_alert (event_str)) {
-            return;
-        }
-        debug ("Tamper detected [%s]: %s", event_type, details);
-        _unsent_alerts.add (event_str);
-        persist_unsent_alerts ();
-        tamper_detected (event_type, details);
-
-        if (_matrix_svc != null && _matrix_svc.is_configured) {
-            _matrix_svc.send_alert.begin (event_type, details, (obj, res) => {
-                if (_matrix_svc.send_alert.end (res)) {
-                    remove_unsent_alert (event_str);
-                }
-            });
-        }
+        emit_alert (event_type, details, false);
     }
 
     private void emit_warning (string event_type, string details) {
-        var event_str = "~%s: %s".printf (event_type, details);
+        emit_alert (event_type, details, true);
+    }
+
+    private void emit_alert (string event_type, string details, bool is_warning) {
+        var prefix = is_warning ? "~" : "";
+        var wire_type = prefix + event_type;
+        var event_str = "%s: %s".printf (wire_type, details);
         if (has_unsent_alert (event_str)) {
             return;
         }
-        debug ("Warning [%s]: %s", event_type, details);
+        debug ("%s [%s]: %s", is_warning ? "Warning" : "Tamper detected",
+            event_type, details);
         _unsent_alerts.add (event_str);
         persist_unsent_alerts ();
-        tamper_detected ("~" + event_type, details);
+        tamper_detected (wire_type, details);
 
         if (_matrix_svc != null && _matrix_svc.is_configured) {
-            _matrix_svc.send_alert.begin ("~" + event_type, details, (obj, res) => {
+            _matrix_svc.send_alert.begin (wire_type, details, (obj, res) => {
                 if (_matrix_svc.send_alert.end (res)) {
                     remove_unsent_alert (event_str);
                 }
@@ -948,7 +923,7 @@ public class Vigil.Services.TamperDetectionService : Object {
             return;
         }
 
-        var interval = SecurityUtils.jittered_interval (check_interval_seconds);
+        var interval = SecurityUtils.jittered_interval (CHECK_INTERVAL_SECONDS);
         _timeout_source = Timeout.add_seconds ((uint) interval, () => {
             _timeout_source = 0;
             run_all_checks ();

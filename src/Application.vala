@@ -73,7 +73,8 @@ public class Vigil.Application : Gtk.Application {
         var quit_action = new SimpleAction ("quit", null);
         quit_action.activate.connect (quit);
         add_action (quit_action);
-        set_accels_for_action ("app.quit", { "<Control>q" });
+        string[] quit_accels = { "<Control>q" };
+        set_accels_for_action ("app.quit", quit_accels);
 
         // Handle SIGTERM/SIGINT gracefully so shutdown() runs
         Unix.signal_add (ProcessSignal.TERM, () => { quit (); return Source.REMOVE; });

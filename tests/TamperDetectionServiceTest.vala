@@ -350,74 +350,6 @@ void test_settings_lock_no_tamper_when_properly_locked () {
     settings.set_string ("unlock-code-hash", "");
 }
 
-void test_upload_batch_interval_tampered () {
-    var settings = new GLib.Settings ("io.github.invarianz.vigil");
-    settings.set_boolean ("monitoring-enabled", true);
-    settings.set_int ("min-interval-seconds", 30);
-    settings.set_int ("max-interval-seconds", 120);
-    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
-    settings.set_string ("matrix-access-token", "test-token");
-    settings.set_string ("matrix-room-id", "!room:test");
-    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
-    settings.set_int ("upload-batch-interval-seconds", 5000);
-    settings.set_boolean ("settings-locked", true);
-    settings.set_string ("unlock-code-hash", "test-hash");
-
-    var svc = new Vigil.Services.TamperDetectionService (settings);
-
-    GenericArray<string> events = new GenericArray<string> ();
-    svc.tamper_detected.connect ((t, d) => {
-        events.add (t);
-    });
-
-    svc.check_settings_sanity ();
-
-    bool found = false;
-    for (int i = 0; i < events.length; i++) {
-        if (events[i] == "timer_tampered") found = true;
-    }
-    assert_true (found);
-
-    // Reset
-    settings.set_int ("upload-batch-interval-seconds", 600);
-    settings.set_boolean ("settings-locked", false);
-    settings.set_string ("unlock-code-hash", "");
-}
-
-void test_tamper_check_interval_tampered () {
-    var settings = new GLib.Settings ("io.github.invarianz.vigil");
-    settings.set_boolean ("monitoring-enabled", true);
-    settings.set_int ("min-interval-seconds", 30);
-    settings.set_int ("max-interval-seconds", 120);
-    settings.set_string ("matrix-homeserver-url", "https://matrix.org");
-    settings.set_string ("matrix-access-token", "test-token");
-    settings.set_string ("matrix-room-id", "!room:test");
-    settings.set_string ("partner-matrix-id", "@partner:matrix.org");
-    settings.set_int ("tamper-check-interval-seconds", 3600);
-    settings.set_boolean ("settings-locked", true);
-    settings.set_string ("unlock-code-hash", "test-hash");
-
-    var svc = new Vigil.Services.TamperDetectionService (settings);
-
-    GenericArray<string> events = new GenericArray<string> ();
-    svc.tamper_detected.connect ((t, d) => {
-        events.add (t);
-    });
-
-    svc.check_settings_sanity ();
-
-    bool found = false;
-    for (int i = 0; i < events.length; i++) {
-        if (events[i] == "timer_tampered") found = true;
-    }
-    assert_true (found);
-
-    // Reset
-    settings.set_int ("tamper-check-interval-seconds", 120);
-    settings.set_boolean ("settings-locked", false);
-    settings.set_string ("unlock-code-hash", "");
-}
-
 void test_partner_id_cleared_locked () {
     var settings = new GLib.Settings ("io.github.invarianz.vigil");
     settings.set_boolean ("monitoring-enabled", true);
@@ -490,9 +422,6 @@ void test_timers_within_limits_no_tamper () {
     settings.set_string ("matrix-access-token", "test-token");
     settings.set_string ("matrix-room-id", "!room:test");
     settings.set_string ("partner-matrix-id", "@partner:matrix.org");
-    settings.set_int ("heartbeat-interval-seconds", 900);
-    settings.set_int ("upload-batch-interval-seconds", 600);
-    settings.set_int ("tamper-check-interval-seconds", 120);
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -872,8 +801,6 @@ void test_settings_exact_boundary_triggers_tamper () {
     // Set values outside valid bounds (both below floor and above ceiling)
     settings.set_int ("min-interval-seconds", 10);
     settings.set_int ("max-interval-seconds", 300);
-    settings.set_int ("upload-batch-interval-seconds", 3600);
-    settings.set_int ("tamper-check-interval-seconds", 1800);
 
     var svc = new Vigil.Services.TamperDetectionService (settings);
 
@@ -884,21 +811,16 @@ void test_settings_exact_boundary_triggers_tamper () {
 
     svc.check_settings_sanity ();
 
-    // All four boundary values should trigger as tamper (locked)
+    // Both interval boundary values should trigger as tamper (locked)
     int interval_count = 0;
-    int timer_count = 0;
     for (int i = 0; i < events.length; i++) {
         if (events[i] == "interval_tampered") interval_count++;
-        if (events[i] == "timer_tampered") timer_count++;
     }
     assert_true (interval_count == 2); // min + max
-    assert_true (timer_count == 2);    // upload + tamper
 
     // Reset
     settings.set_int ("min-interval-seconds", 30);
     settings.set_int ("max-interval-seconds", 120);
-    settings.set_int ("upload-batch-interval-seconds", 600);
-    settings.set_int ("tamper-check-interval-seconds", 120);
     settings.set_boolean ("settings-locked", false);
     settings.set_string ("unlock-code-hash", "");
 }
@@ -1101,8 +1023,6 @@ public static int main (string[] args) {
     Test.add_func ("/tamper/lock_authorized_unlock", test_settings_lock_authorized_unlock);
     Test.add_func ("/tamper/lock_hash_cleared", test_settings_lock_hash_cleared_detected);
     Test.add_func ("/tamper/lock_properly_locked", test_settings_lock_no_tamper_when_properly_locked);
-    Test.add_func ("/tamper/upload_batch_interval_tampered", test_upload_batch_interval_tampered);
-    Test.add_func ("/tamper/tamper_check_interval_tampered", test_tamper_check_interval_tampered);
     Test.add_func ("/tamper/partner_id_cleared_locked", test_partner_id_cleared_locked);
     Test.add_func ("/tamper/partner_id_cleared_unlocked", test_partner_id_cleared_unlocked);
     Test.add_func ("/tamper/timers_within_limits", test_timers_within_limits_no_tamper);
