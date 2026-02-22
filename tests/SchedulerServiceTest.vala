@@ -54,14 +54,8 @@ void test_scheduler_start_sets_running () {
     var scheduler = new Vigil.Services.SchedulerService ();
     scheduler.min_interval_seconds = 9999; // Don't actually fire
 
-    bool started_signal_emitted = false;
-    scheduler.scheduler_started.connect (() => {
-        started_signal_emitted = true;
-    });
-
     scheduler.start ();
     assert_true (scheduler.is_running);
-    assert_true (started_signal_emitted);
     assert_true (scheduler.next_capture_time != null);
 
     scheduler.stop (); // cleanup
@@ -71,16 +65,10 @@ void test_scheduler_stop_clears_state () {
     var scheduler = new Vigil.Services.SchedulerService ();
     scheduler.min_interval_seconds = 9999;
 
-    bool stopped_signal_emitted = false;
-    scheduler.scheduler_stopped.connect (() => {
-        stopped_signal_emitted = true;
-    });
-
     scheduler.start ();
     scheduler.stop ();
 
     assert_true (scheduler.is_running == false);
-    assert_true (stopped_signal_emitted);
     assert_true (scheduler.next_capture_time == null);
 }
 
@@ -88,15 +76,10 @@ void test_scheduler_double_start_is_safe () {
     var scheduler = new Vigil.Services.SchedulerService ();
     scheduler.min_interval_seconds = 9999;
 
-    int start_count = 0;
-    scheduler.scheduler_started.connect (() => {
-        start_count++;
-    });
-
     scheduler.start ();
     scheduler.start (); // second call should be a no-op
 
-    assert_true (start_count == 1);
+    assert_true (scheduler.is_running);
     scheduler.stop ();
 }
 
@@ -104,16 +87,11 @@ void test_scheduler_double_stop_is_safe () {
     var scheduler = new Vigil.Services.SchedulerService ();
     scheduler.min_interval_seconds = 9999;
 
-    int stop_count = 0;
-    scheduler.scheduler_stopped.connect (() => {
-        stop_count++;
-    });
-
     scheduler.start ();
     scheduler.stop ();
     scheduler.stop (); // second call should be a no-op
 
-    assert_true (stop_count == 1);
+    assert_true (scheduler.is_running == false);
 }
 
 void test_scheduler_capture_fires () {

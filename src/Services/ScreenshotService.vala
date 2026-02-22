@@ -24,6 +24,13 @@ public class Vigil.Services.ScreenshotService : Object {
     private bool _portal_available = false;
     private GLib.Settings? _sound_settings = null;
 
+    private static void ensure_parent_dir (string path) throws Error {
+        var dir = File.new_for_path (path).get_parent ();
+        if (dir != null && !dir.query_exists ()) {
+            dir.make_directory_with_parents (null);
+        }
+    }
+
     public string? active_backend_name {
         get {
             if (_gala_available) return "Gala D-Bus";
@@ -125,11 +132,7 @@ public class Vigil.Services.ScreenshotService : Object {
      */
     private async bool take_screenshot_gala (string destination_path) {
         try {
-            var dest = File.new_for_path (destination_path);
-            var dest_dir = dest.get_parent ();
-            if (dest_dir != null && !dest_dir.query_exists ()) {
-                dest_dir.make_directory_with_parents (null);
-            }
+            ensure_parent_dir (destination_path);
 
             var connection = yield Bus.get (BusType.SESSION);
 
@@ -192,10 +195,7 @@ public class Vigil.Services.ScreenshotService : Object {
                     "Portal screenshot source is not a regular file");
             }
 
-            var dest_dir = dest_file.get_parent ();
-            if (dest_dir != null && !dest_dir.query_exists ()) {
-                dest_dir.make_directory_with_parents (null);
-            }
+            ensure_parent_dir (destination_path);
 
             yield source_file.copy_async (
                 dest_file,

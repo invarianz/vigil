@@ -188,8 +188,9 @@ public class Vigil.Application : Gtk.Application {
     protected override void shutdown () {
         bool system_shutdown = _engine != null && _engine.system_shutdown_pending;
 
-        // If this is NOT a system shutdown, send alert directly (synchronous,
-        // no fire-and-forget to avoid duplicate delivery)
+        // If this is NOT a system shutdown, send alert + "going offline" notice.
+        // System shutdowns already sent theirs in on_prepare_for_shutdown
+        // while the network was still up.
         if (!system_shutdown && _matrix_svc != null && _matrix_svc.is_configured) {
             bool locked = _settings != null &&
                 _settings.get_boolean ("settings-locked");
@@ -207,25 +208,25 @@ public class Vigil.Application : Gtk.Application {
                 return Source.REMOVE;
             });
             alert_loop.run ();
-        }
 
-        // Send "going offline" notice in orange (system shutdowns already
-        // sent theirs in on_prepare_for_shutdown while network was still up)
-        if (!system_shutdown && _matrix_svc != null && _matrix_svc.is_configured) {
             var now = new DateTime.now_local ();
             var uptime = now.difference (_start_time) / TimeSpan.SECOND;
             var text = "Going offline — Vigil was stopped manually.\n" +
                 "Was running for %s.".printf (
                     Vigil.Services.TamperDetectionService.format_duration (uptime));
 
-            var loop = new MainLoop (null, false);
+            var notice_loop = new MainLoop (null, false);
             _matrix_svc.send_notice.begin (text, "#fd7e14", (obj, res) => {
                 _matrix_svc.send_notice.end (res);
-                loop.quit ();
+                notice_loop.quit ();
             });
-            Timeout.add_seconds (5, () => { loop.quit (); return Source.REMOVE; });
-            loop.run ();
+            Timeout.add_seconds (5, () => {
+                notice_loop.quit ();
+                return Source.REMOVE;
+            });
+            notice_loop.run ();
         }
+
         if (_tamper_svc != null) {
             _tamper_svc.stop ();
         }

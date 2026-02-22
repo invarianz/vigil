@@ -123,19 +123,16 @@ public class Vigil.Services.EncryptionService : Object {
      * POST /_matrix/client/v3/keys/upload
      */
     public string get_device_keys_json () {
-        // Pass 1: Build unsigned device_keys JSON for signing
+        // Build unsigned device_keys JSON for signing
         var dk_builder = new Json.Builder ();
         dk_builder.begin_object ();
-
         dk_builder.set_member_name ("algorithms");
         dk_builder.begin_array ();
         dk_builder.add_string_value ("m.olm.v1.curve25519-aes-sha2");
         dk_builder.add_string_value ("m.megolm.v1.aes-sha2");
         dk_builder.end_array ();
-
         dk_builder.set_member_name ("device_id");
         dk_builder.add_string_value (device_id);
-
         dk_builder.set_member_name ("keys");
         dk_builder.begin_object ();
         dk_builder.set_member_name ("curve25519:%s".printf (device_id));
@@ -143,57 +140,31 @@ public class Vigil.Services.EncryptionService : Object {
         dk_builder.set_member_name ("ed25519:%s".printf (device_id));
         dk_builder.add_string_value (ed25519_key);
         dk_builder.end_object ();
-
         dk_builder.set_member_name ("user_id");
         dk_builder.add_string_value (user_id);
-
         dk_builder.end_object ();
 
-        // Sign the unsigned device_keys
+        // Sign, then inject signatures into the same object
         var dk_gen = new Json.Generator ();
         dk_gen.set_root (dk_builder.get_root ());
-        var unsigned_json = dk_gen.to_data (null);
-        var signature = sign_string (unsigned_json);
+        var signature = sign_string (dk_gen.to_data (null));
 
-        // Pass 2: Build the full upload body with signatures included
+        var sig_builder = new Json.Builder ();
+        sig_builder.begin_object ();
+        sig_builder.set_member_name (user_id);
+        sig_builder.begin_object ();
+        sig_builder.set_member_name ("ed25519:%s".printf (device_id));
+        sig_builder.add_string_value (signature);
+        sig_builder.end_object ();
+        sig_builder.end_object ();
+        dk_builder.get_root ().get_object ().set_member (
+            "signatures", sig_builder.get_root ());
+
+        // Wrap in upload body: { device_keys: ..., one_time_keys: ... }
         var builder = new Json.Builder ();
         builder.begin_object ();
-
         builder.set_member_name ("device_keys");
-        builder.begin_object ();
-
-        builder.set_member_name ("algorithms");
-        builder.begin_array ();
-        builder.add_string_value ("m.olm.v1.curve25519-aes-sha2");
-        builder.add_string_value ("m.megolm.v1.aes-sha2");
-        builder.end_array ();
-
-        builder.set_member_name ("device_id");
-        builder.add_string_value (device_id);
-
-        builder.set_member_name ("keys");
-        builder.begin_object ();
-        builder.set_member_name ("curve25519:%s".printf (device_id));
-        builder.add_string_value (curve25519_key);
-        builder.set_member_name ("ed25519:%s".printf (device_id));
-        builder.add_string_value (ed25519_key);
-        builder.end_object ();
-
-        builder.set_member_name ("signatures");
-        builder.begin_object ();
-        builder.set_member_name (user_id);
-        builder.begin_object ();
-        builder.set_member_name ("ed25519:%s".printf (device_id));
-        builder.add_string_value (signature);
-        builder.end_object ();
-        builder.end_object ();
-
-        builder.set_member_name ("user_id");
-        builder.add_string_value (user_id);
-
-        builder.end_object (); // device_keys
-
-        // One-time keys
+        builder.add_value (dk_builder.get_root ());
         builder.set_member_name ("one_time_keys");
         builder.begin_object ();
 

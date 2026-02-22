@@ -76,6 +76,43 @@ public class Vigil.Services.MatrixTransportService : Object {
         return resp;
     }
 
+    /**
+     * Send an authenticated HTTP request to the Matrix homeserver.
+     * Returns the response body on success (HTTP 200), or null on failure.
+     */
+    private async string? matrix_request (string method, string url,
+                                           Bytes? body = null,
+                                           string content_type = "application/json",
+                                           string context = "Request") {
+        try {
+            var message = new Soup.Message (method, url);
+            if (body != null) {
+                message.set_request_body_from_bytes (content_type, body);
+            }
+            set_auth_header (message);
+
+            var response_bytes = yield _session.send_and_read_async (
+                message, Priority.DEFAULT, null);
+            var status = message.get_status ();
+
+            if (status != Soup.Status.OK) {
+                var resp = (string) response_bytes.get_data ();
+                warning ("%s failed (HTTP %u): %s", context, status, safe_log (resp));
+                return null;
+            }
+            return (string) response_bytes.get_data ();
+        } catch (Error e) {
+            warning ("%s error: %s", context, e.message);
+            return null;
+        }
+    }
+
+    private static string json_to_string (Json.Builder builder) {
+        var gen = new Json.Generator ();
+        gen.set_root (builder.get_root ());
+        return gen.to_data (null);
+    }
+
     construct {
         _session = new Soup.Session () {
             timeout = 30,
@@ -208,9 +245,7 @@ public class Vigil.Services.MatrixTransportService : Object {
             builder.add_string_value ("Vigil");
             builder.end_object ();
 
-            var gen = new Json.Generator ();
-            gen.set_root (builder.get_root ());
-            var body_json = gen.to_data (null);
+            var body_json = json_to_string (builder);
 
             var message = new Soup.Message ("POST", url);
             message.set_request_body_from_bytes (
@@ -276,90 +311,59 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (homeserver_url == "" || access_token == "") {
             return null;
         }
+        var url = "%s/_matrix/client/v3/createRoom".printf (homeserver_url);
+
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("visibility");
+        builder.add_string_value ("private");
+        builder.set_member_name ("preset");
+        builder.add_string_value ("trusted_private_chat");
+        builder.set_member_name ("name");
+        builder.add_string_value ("Vigil Accountability");
+        builder.set_member_name ("topic");
+        builder.add_string_value ("Vigil screenshot monitoring");
+        builder.set_member_name ("is_direct");
+        builder.add_boolean_value (true);
+        builder.set_member_name ("invite");
+        builder.begin_array ();
+        builder.add_string_value (partner_id);
+        builder.end_array ();
+        builder.set_member_name ("initial_state");
+        builder.begin_array ();
+        builder.begin_object ();
+        builder.set_member_name ("type");
+        builder.add_string_value ("m.room.encryption");
+        builder.set_member_name ("state_key");
+        builder.add_string_value ("");
+        builder.set_member_name ("content");
+        builder.begin_object ();
+        builder.set_member_name ("algorithm");
+        builder.add_string_value ("m.megolm.v1.aes-sha2");
+        builder.end_object ();
+        builder.end_object ();
+        builder.end_array ();
+        builder.end_object ();
+
+        var resp_str = yield matrix_request ("POST", url,
+            new Bytes (json_to_string (builder).data),
+            "application/json", "Room creation");
+        if (resp_str == null) return null;
 
         try {
-            var url = "%s/_matrix/client/v3/createRoom".printf (
-                homeserver_url
-            );
-
-            var builder = new Json.Builder ();
-            builder.begin_object ();
-
-            builder.set_member_name ("visibility");
-            builder.add_string_value ("private");
-
-            builder.set_member_name ("preset");
-            builder.add_string_value ("trusted_private_chat");
-
-            builder.set_member_name ("name");
-            builder.add_string_value ("Vigil Accountability");
-
-            builder.set_member_name ("topic");
-            builder.add_string_value ("Vigil screenshot monitoring");
-
-            builder.set_member_name ("is_direct");
-            builder.add_boolean_value (true);
-
-            // Invite the partner
-            builder.set_member_name ("invite");
-            builder.begin_array ();
-            builder.add_string_value (partner_id);
-            builder.end_array ();
-
-            // Enable encryption from the start
-            builder.set_member_name ("initial_state");
-            builder.begin_array ();
-            builder.begin_object ();
-            builder.set_member_name ("type");
-            builder.add_string_value ("m.room.encryption");
-            builder.set_member_name ("state_key");
-            builder.add_string_value ("");
-            builder.set_member_name ("content");
-            builder.begin_object ();
-            builder.set_member_name ("algorithm");
-            builder.add_string_value ("m.megolm.v1.aes-sha2");
-            builder.end_object ();
-            builder.end_object ();
-            builder.end_array ();
-
-            builder.end_object ();
-
-            var gen = new Json.Generator ();
-            gen.set_root (builder.get_root ());
-            var body_json = gen.to_data (null);
-
-            var message = new Soup.Message ("POST", url);
-            message.set_request_body_from_bytes (
-                "application/json",
-                new Bytes (body_json.data)
-            );
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-            var resp_str = (string) response_bytes.get_data ();
-
-            if (status != Soup.Status.OK) {
-                warning ("Matrix room creation failed (HTTP %u): %s", status, safe_log (resp_str));
-                return null;
-            }
-
             var parser = new Json.Parser ();
             parser.load_from_data (resp_str);
             var root = parser.get_root ().get_object ();
-
             if (root.has_member ("room_id")) {
                 var new_room_id = root.get_string_member ("room_id");
                 room_id = new_room_id;
                 debug ("Created encrypted room: %s", new_room_id);
                 return new_room_id;
             }
-
-            return null;
         } catch (Error e) {
-            warning ("Matrix room creation error: %s", e.message);
-            return null;
+            warning ("Room creation parse error: %s", e.message);
         }
+        return null;
     }
 
     /**
@@ -382,67 +386,40 @@ public class Vigil.Services.MatrixTransportService : Object {
             _last_user_id == "") {
             return false;
         }
+        var url = "%s/_matrix/client/v3/rooms/%s/state/m.room.power_levels".printf (
+            homeserver_url, Uri.escape_string (target_room_id, null, false));
 
-        try {
-            var url = "%s/_matrix/client/v3/rooms/%s/state/m.room.power_levels".printf (
-                homeserver_url,
-                Uri.escape_string (target_room_id, null, false)
-            );
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("users");
+        builder.begin_object ();
+        builder.set_member_name (_last_user_id);
+        builder.add_int_value (10);
+        builder.set_member_name (partner_id);
+        builder.add_int_value (100);
+        builder.end_object ();
+        builder.set_member_name ("users_default");
+        builder.add_int_value (0);
+        builder.set_member_name ("events_default");
+        builder.add_int_value (10);
+        builder.set_member_name ("state_default");
+        builder.add_int_value (100);
+        builder.set_member_name ("redact");
+        builder.add_int_value (100);
+        builder.set_member_name ("ban");
+        builder.add_int_value (100);
+        builder.set_member_name ("kick");
+        builder.add_int_value (100);
+        builder.set_member_name ("invite");
+        builder.add_int_value (100);
+        builder.end_object ();
 
-            var builder = new Json.Builder ();
-            builder.begin_object ();
-            builder.set_member_name ("users");
-            builder.begin_object ();
-            builder.set_member_name (_last_user_id);
-            builder.add_int_value (10);
-            builder.set_member_name (partner_id);
-            builder.add_int_value (100);
-            builder.end_object ();
-            builder.set_member_name ("users_default");
-            builder.add_int_value (0);
-            builder.set_member_name ("events_default");
-            builder.add_int_value (10);
-            builder.set_member_name ("state_default");
-            builder.add_int_value (100);
-            builder.set_member_name ("redact");
-            builder.add_int_value (100);
-            builder.set_member_name ("ban");
-            builder.add_int_value (100);
-            builder.set_member_name ("kick");
-            builder.add_int_value (100);
-            builder.set_member_name ("invite");
-            builder.add_int_value (100);
-            builder.end_object ();
-
-            var gen = new Json.Generator ();
-            gen.set_root (builder.get_root ());
-            var body_json = gen.to_data (null);
-
-            var message = new Soup.Message ("PUT", url);
-            message.set_request_body_from_bytes (
-                "application/json",
-                new Bytes (body_json.data)
-            );
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (
-                message, Priority.DEFAULT, null
-            );
-            var status = message.get_status ();
-
-            if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Power levels update failed (HTTP %u): %s",
-                    status, safe_log (resp));
-                return false;
-            }
-
-            debug ("Room power levels locked down");
-            return true;
-        } catch (Error e) {
-            warning ("Power levels update error: %s", e.message);
-            return false;
-        }
+        var resp = yield matrix_request ("PUT", url,
+            new Bytes (json_to_string (builder).data),
+            "application/json", "Power levels update");
+        if (resp == null) return false;
+        debug ("Room power levels locked down");
+        return true;
     }
 
     /**
@@ -457,34 +434,12 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (homeserver_url == "" || access_token == "") {
             return false;
         }
-
-        try {
-            var url = "%s/_matrix/client/v3/keys/upload".printf (
-                homeserver_url
-            );
-
-            var message = new Soup.Message ("POST", url);
-            message.set_request_body_from_bytes (
-                "application/json",
-                new Bytes (keys_json.data)
-            );
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-
-            if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Keys upload failed (HTTP %u): %s", status, safe_log (resp));
-                return false;
-            }
-
-            debug ("Device keys uploaded successfully");
-            return true;
-        } catch (Error e) {
-            warning ("Keys upload error: %s", e.message);
-            return false;
-        }
+        var url = "%s/_matrix/client/v3/keys/upload".printf (homeserver_url);
+        var resp = yield matrix_request ("POST", url,
+            new Bytes (keys_json.data), "application/json", "Keys upload");
+        if (resp == null) return false;
+        debug ("Device keys uploaded successfully");
+        return true;
     }
 
     /**
@@ -499,47 +454,20 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (homeserver_url == "" || access_token == "") {
             return null;
         }
+        var url = "%s/_matrix/client/v3/keys/query".printf (homeserver_url);
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("device_keys");
+        builder.begin_object ();
+        builder.set_member_name (user_id);
+        builder.begin_array ();
+        builder.end_array ();
+        builder.end_object ();
+        builder.end_object ();
 
-        try {
-            var url = "%s/_matrix/client/v3/keys/query".printf (
-                homeserver_url
-            );
-
-            var builder = new Json.Builder ();
-            builder.begin_object ();
-            builder.set_member_name ("device_keys");
-            builder.begin_object ();
-            builder.set_member_name (user_id);
-            builder.begin_array ();
-            builder.end_array (); // empty = all devices
-            builder.end_object ();
-            builder.end_object ();
-
-            var gen = new Json.Generator ();
-            gen.set_root (builder.get_root ());
-            var body_json = gen.to_data (null);
-
-            var message = new Soup.Message ("POST", url);
-            message.set_request_body_from_bytes (
-                "application/json",
-                new Bytes (body_json.data)
-            );
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-
-            if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Keys query failed (HTTP %u): %s", status, safe_log (resp));
-                return null;
-            }
-
-            return (string) response_bytes.get_data ();
-        } catch (Error e) {
-            warning ("Keys query error: %s", e.message);
-            return null;
-        }
+        return yield matrix_request ("POST", url,
+            new Bytes (json_to_string (builder).data),
+            "application/json", "Keys query");
     }
 
     /**
@@ -555,51 +483,24 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (homeserver_url == "" || access_token == "") {
             return null;
         }
-
-        try {
-            var url = "%s/_matrix/client/v3/keys/claim".printf (
-                homeserver_url
-            );
-
-            var builder = new Json.Builder ();
-            builder.begin_object ();
-            builder.set_member_name ("one_time_keys");
-            builder.begin_object ();
-            builder.set_member_name (user_id);
-            builder.begin_object ();
-            foreach (var dev_id in device_ids) {
-                builder.set_member_name (dev_id);
-                builder.add_string_value ("signed_curve25519");
-            }
-            builder.end_object ();
-            builder.end_object ();
-            builder.end_object ();
-
-            var gen = new Json.Generator ();
-            gen.set_root (builder.get_root ());
-            var body_json = gen.to_data (null);
-
-            var message = new Soup.Message ("POST", url);
-            message.set_request_body_from_bytes (
-                "application/json",
-                new Bytes (body_json.data)
-            );
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-
-            if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("Keys claim failed (HTTP %u): %s", status, safe_log (resp));
-                return null;
-            }
-
-            return (string) response_bytes.get_data ();
-        } catch (Error e) {
-            warning ("Keys claim error: %s", e.message);
-            return null;
+        var url = "%s/_matrix/client/v3/keys/claim".printf (homeserver_url);
+        var builder = new Json.Builder ();
+        builder.begin_object ();
+        builder.set_member_name ("one_time_keys");
+        builder.begin_object ();
+        builder.set_member_name (user_id);
+        builder.begin_object ();
+        foreach (var dev_id in device_ids) {
+            builder.set_member_name (dev_id);
+            builder.add_string_value ("signed_curve25519");
         }
+        builder.end_object ();
+        builder.end_object ();
+        builder.end_object ();
+
+        return yield matrix_request ("POST", url,
+            new Bytes (json_to_string (builder).data),
+            "application/json", "Keys claim");
     }
 
     /**
@@ -615,42 +516,14 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (homeserver_url == "" || access_token == "") {
             return false;
         }
-
-        try {
-            var txn_id = generate_txn_id ();
-            var encoded_type = GLib.Uri.escape_string (
-                event_type, null, true
-            );
-            var url = "%s/_matrix/client/v3/sendToDevice/%s/%s".printf (
-                homeserver_url,
-                encoded_type,
-                txn_id
-            );
-
-            // Wrap in { "messages": ... }
-            var body = "{\"messages\":%s}".printf (messages_json);
-
-            var message = new Soup.Message ("PUT", url);
-            message.set_request_body_from_bytes (
-                "application/json",
-                new Bytes (body.data)
-            );
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-
-            if (status != Soup.Status.OK) {
-                var resp = (string) response_bytes.get_data ();
-                warning ("To-device send failed (HTTP %u): %s", status, safe_log (resp));
-                return false;
-            }
-
-            return true;
-        } catch (Error e) {
-            warning ("To-device send error: %s", e.message);
-            return false;
-        }
+        var txn_id = generate_txn_id ();
+        var encoded_type = GLib.Uri.escape_string (event_type, null, true);
+        var url = "%s/_matrix/client/v3/sendToDevice/%s/%s".printf (
+            homeserver_url, encoded_type, txn_id);
+        var body = "{\"messages\":%s}".printf (messages_json);
+        var resp = yield matrix_request ("PUT", url,
+            new Bytes (body.data), "application/json", "To-device send");
+        return resp != null;
     }
 
     /**
@@ -665,40 +538,25 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (!is_configured) {
             return null;
         }
+        var url = "%s/_matrix/media/v3/upload?filename=%s".printf (
+            homeserver_url, GLib.Uri.escape_string (filename, null, true));
+
+        var resp_str = yield matrix_request ("POST", url,
+            data, content_type, "Media upload");
+        if (resp_str == null) return null;
 
         try {
-            var upload_url = "%s/_matrix/media/v3/upload?filename=%s".printf (
-                homeserver_url,
-                GLib.Uri.escape_string (filename, null, true)
-            );
-
-            var message = new Soup.Message ("POST", upload_url);
-            message.set_request_body_from_bytes (content_type, data);
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-            var resp_str = (string) response_bytes.get_data ();
-
-            if (status != Soup.Status.OK) {
-                warning ("Matrix media upload failed (HTTP %u): %s", status, safe_log (resp_str));
-                return null;
-            }
-
             var parser = new Json.Parser ();
             parser.load_from_data (resp_str);
             var root = parser.get_root ().get_object ();
-
             if (root.has_member ("content_uri")) {
                 return root.get_string_member ("content_uri");
-            } else {
-                warning ("Matrix upload response missing content_uri");
-                return null;
             }
+            warning ("Upload response missing content_uri");
         } catch (Error e) {
-            warning ("Matrix media upload error: %s", e.message);
-            return null;
+            warning ("Upload parse error: %s", e.message);
         }
+        return null;
     }
 
     /**
@@ -730,52 +588,32 @@ public class Vigil.Services.MatrixTransportService : Object {
             }
         }
 
+        var txn_id = generate_txn_id ();
+        var url = "%s/_matrix/client/v3/rooms/%s/send/%s/%s".printf (
+            homeserver_url,
+            GLib.Uri.escape_string (room_id, null, true),
+            GLib.Uri.escape_string (actual_type, null, true),
+            txn_id);
+
+        var resp_str = yield matrix_request ("PUT", url,
+            new Bytes (actual_content.data),
+            "application/json", "Send event");
+        if (resp_str == null) return null;
+
         try {
-            var txn_id = generate_txn_id ();
-            var encoded_room = GLib.Uri.escape_string (room_id, null, true);
-
-            var encoded_type = GLib.Uri.escape_string (
-                actual_type, null, true
-            );
-            var url = "%s/_matrix/client/v3/rooms/%s/send/%s/%s".printf (
-                homeserver_url,
-                encoded_room,
-                encoded_type,
-                txn_id
-            );
-
-            var message = new Soup.Message ("PUT", url);
-            message.set_request_body_from_bytes (
-                "application/json",
-                new Bytes (actual_content.data)
-            );
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-            var resp_str = (string) response_bytes.get_data ();
-
-            if (status != Soup.Status.OK) {
-                warning ("Matrix send event failed (HTTP %u): %s", status, safe_log (resp_str));
-                return null;
-            }
-
             var parser = new Json.Parser ();
             parser.load_from_data (resp_str);
             var root = parser.get_root ().get_object ();
-
             if (root.has_member ("event_id")) {
-                // Persist Megolm state after successful send
                 if (encryption != null) {
                     encryption.save_session_if_needed ();
                 }
                 return root.get_string_member ("event_id");
             }
-            return null;
         } catch (Error e) {
-            warning ("Matrix send event error: %s", e.message);
-            return null;
+            warning ("Send event parse error: %s", e.message);
         }
+        return null;
     }
 
     /**
@@ -952,12 +790,9 @@ public class Vigil.Services.MatrixTransportService : Object {
 
         builder.end_object (); // root
 
-        var gen = new Json.Generator ();
-        gen.set_root (builder.get_root ());
-        var content_json = gen.to_data (null);
-
         // Step 4: Send via Megolm-encrypted room event
-        var event_id = yield send_room_event ("m.room.message", content_json);
+        var event_id = yield send_room_event ("m.room.message",
+            json_to_string (builder));
         if (event_id == null) {
             screenshot_send_failed (filename, "Failed to send encrypted image event");
             return false;
@@ -974,7 +809,6 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (!is_configured) {
             return false;
         }
-
         var builder = new Json.Builder ();
         builder.begin_object ();
         builder.set_member_name ("msgtype");
@@ -983,11 +817,8 @@ public class Vigil.Services.MatrixTransportService : Object {
         builder.add_string_value (text);
         builder.end_object ();
 
-        var gen = new Json.Generator ();
-        gen.set_root (builder.get_root ());
-        var content_json = gen.to_data (null);
-
-        var event_id = yield send_room_event ("m.room.message", content_json);
+        var event_id = yield send_room_event ("m.room.message",
+            json_to_string (builder));
         return event_id != null;
     }
 
@@ -1035,7 +866,6 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (!is_configured) {
             return false;
         }
-
         var builder = new Json.Builder ();
         builder.begin_object ();
         builder.set_member_name ("msgtype");
@@ -1048,11 +878,8 @@ public class Vigil.Services.MatrixTransportService : Object {
         builder.add_string_value (html);
         builder.end_object ();
 
-        var gen = new Json.Generator ();
-        gen.set_root (builder.get_root ());
-        var content_json = gen.to_data (null);
-
-        var event_id = yield send_room_event ("m.room.message", content_json);
+        var event_id = yield send_room_event ("m.room.message",
+            json_to_string (builder));
         return event_id != null;
     }
 
@@ -1074,34 +901,22 @@ public class Vigil.Services.MatrixTransportService : Object {
         if (homeserver_url == "" || access_token == "") {
             return null;
         }
+        var url = "%s/_matrix/client/v3/account/whoami".printf (homeserver_url);
+        var resp_str = yield matrix_request ("GET", url,
+            null, "application/json", "Whoami");
+        if (resp_str == null) return null;
 
         try {
-            var url = "%s/_matrix/client/v3/account/whoami".printf (
-                homeserver_url
-            );
-
-            var message = new Soup.Message ("GET", url);
-            set_auth_header (message);
-
-            var response_bytes = yield _session.send_and_read_async (message, Priority.DEFAULT, null);
-            var status = message.get_status ();
-
-            if (status != Soup.Status.OK) {
-                return null;
-            }
-
             var parser = new Json.Parser ();
-            parser.load_from_data ((string) response_bytes.get_data ());
+            parser.load_from_data (resp_str);
             var root = parser.get_root ().get_object ();
-
             if (root.has_member ("user_id")) {
                 return root.get_string_member ("user_id");
             }
-            return null;
         } catch (Error e) {
-            warning ("Matrix whoami failed: %s", e.message);
-            return null;
+            warning ("Whoami parse error: %s", e.message);
         }
+        return null;
     }
 
     /**

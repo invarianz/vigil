@@ -12,8 +12,6 @@
 public class Vigil.Services.SchedulerService : Object {
 
     public signal void capture_requested ();
-    public signal void scheduler_started ();
-    public signal void scheduler_stopped ();
 
     /** Minimum interval between screenshots in seconds. */
     public int min_interval_seconds { get; set; default = 30; }
@@ -41,7 +39,6 @@ public class Vigil.Services.SchedulerService : Object {
         }
 
         is_running = true;
-        scheduler_started ();
         schedule_next ();
     }
 
@@ -60,7 +57,6 @@ public class Vigil.Services.SchedulerService : Object {
 
         is_running = false;
         next_capture_time = null;
-        scheduler_stopped ();
     }
 
     /**
