@@ -22,7 +22,6 @@ public class Vigil.Services.ScreenshotService : Object {
 
     private bool _gala_available = false;
     private bool _portal_available = false;
-    private GLib.Settings? _sound_settings = null;
 
     private static void ensure_parent_dir (string path) throws Error {
         var dir = File.new_for_path (path).get_parent ();
@@ -60,66 +59,30 @@ public class Vigil.Services.ScreenshotService : Object {
     }
 
     /**
-     * Suppress the screenshot shutter sound by temporarily disabling
-     * event sounds in GNOME/Gala. Returns the original value so it
-     * can be restored after the screenshot.
-     */
-    private bool suppress_event_sounds () {
-        if (_sound_settings == null) {
-            var source = GLib.SettingsSchemaSource.get_default ();
-            if (source == null) {
-                return false;
-            }
-            var schema = source.lookup ("org.gnome.desktop.sound", true);
-            if (schema == null) {
-                return false;
-            }
-            _sound_settings = new GLib.Settings.full (schema, null, null);
-        }
-
-        bool was_enabled = _sound_settings.get_boolean ("event-sounds");
-        if (was_enabled) {
-            _sound_settings.set_boolean ("event-sounds", false);
-        }
-        return was_enabled;
-    }
-
-    private void restore_event_sounds (bool was_enabled) {
-        if (was_enabled && _sound_settings != null) {
-            _sound_settings.set_boolean ("event-sounds", true);
-        }
-    }
-
-    /**
      * Take a screenshot and save it to the given path.
      *
-     * Suppresses the system event-sounds setting around the capture
-     * to prevent Gala/Portal from playing a shutter sound. The setting
-     * is restored after the screenshot completes (or fails).
+     * Gala D-Bus with flash=false is already silent (no shutter sound).
+     * The Portal fallback shows a flash regardless, so no sound
+     * suppression is needed for either backend.
      *
      * @param destination_path Where to save the screenshot PNG.
      * @return true on success.
      */
     public async bool take_screenshot (string destination_path) {
-        bool sounds_were_enabled = suppress_event_sounds ();
-        bool result;
-
         if (_gala_available) {
-            result = yield take_screenshot_gala (destination_path);
+            bool result = yield take_screenshot_gala (destination_path);
             if (!result && _portal_available) {
                 result = yield take_screenshot_portal (destination_path);
             }
+            return result;
         } else if (_portal_available) {
-            result = yield take_screenshot_portal (destination_path);
+            return yield take_screenshot_portal (destination_path);
         } else {
             var msg = "No screenshot backend is available";
             warning (msg);
             screenshot_failed (msg);
-            result = false;
+            return false;
         }
-
-        restore_event_sounds (sounds_were_enabled);
-        return result;
     }
 
     /**
