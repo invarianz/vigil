@@ -87,6 +87,12 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
             return true; // prevent destruction — process stays alive via hold()
         });
 
+        // Lock monitoring switch when settings are locked
+        status_view.set_locked (settings.get_boolean ("settings-locked"));
+        settings.changed["settings-locked"].connect (() => {
+            status_view.set_locked (settings.get_boolean ("settings-locked"));
+        });
+
         // Monitoring toggle changes GSettings, which the engine watches
         status_view.monitoring_toggled.connect ((active) => {
             settings.set_boolean ("monitoring-enabled", active);

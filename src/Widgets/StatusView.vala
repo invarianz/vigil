@@ -16,6 +16,7 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
     private Gtk.Label backend_label;
     private Gtk.Switch monitoring_switch;
     private ulong _switch_handler_id;
+    private bool _locked;
 
     public signal void monitoring_toggled (bool active);
 
@@ -110,6 +111,12 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
         monitoring_switch.active = active;
         SignalHandler.unblock (monitoring_switch, _switch_handler_id);
         update_status_display ();
+        update_switch_sensitivity ();
+    }
+
+    public void set_locked (bool locked) {
+        _locked = locked;
+        update_switch_sensitivity ();
     }
 
     public void set_backend_name (string? name) {
@@ -137,6 +144,11 @@ public class Vigil.Widgets.StatusView : Gtk.Box {
         row.append (label);
         row.append (value_label);
         return row;
+    }
+
+    private void update_switch_sensitivity () {
+        // Locked + active → can't turn off; locked + inactive → can still turn on
+        monitoring_switch.sensitive = !_locked || !monitoring_switch.active;
     }
 
     private void update_status_display () {

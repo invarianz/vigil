@@ -77,6 +77,9 @@ public class Vigil.Services.TamperDetectionService : Object {
     /** List of tamper events pending delivery. */
     private GenericArray<string> _unsent_alerts;
 
+    /** Events already fired this session (prevents periodic re-firing). */
+    private GenericSet<string> _fired_alerts;
+
     /** Matrix transport for sending alerts. May be null in tests. */
     private Vigil.Services.MatrixTransportService? _matrix_svc;
 
@@ -94,6 +97,7 @@ public class Vigil.Services.TamperDetectionService : Object {
         _matrix_svc = matrix_svc;
         _expected_deletions = new GenericSet<string> (str_hash, str_equal);
         _crypto_files_seen = new GenericSet<string> (str_hash, str_equal);
+        _fired_alerts = new GenericSet<string> (str_hash, str_equal);
         _monitors = new GenericArray<FileMonitor> ();
         _unsent_alerts = new GenericArray<string> ();
 
@@ -608,9 +612,10 @@ public class Vigil.Services.TamperDetectionService : Object {
         var prefix = is_warning ? "~" : "";
         var wire_type = prefix + event_type;
         var event_str = "%s: %s".printf (wire_type, details);
-        if (has_unsent_alert (event_str)) {
+        if (_fired_alerts.contains (event_str)) {
             return;
         }
+        _fired_alerts.add (event_str);
         debug ("%s [%s]: %s", is_warning ? "Warning" : "Tamper detected",
             event_type, details);
         _unsent_alerts.add (event_str);
@@ -624,15 +629,6 @@ public class Vigil.Services.TamperDetectionService : Object {
                 }
             });
         }
-    }
-
-    private bool has_unsent_alert (string event_str) {
-        for (uint i = 0; i < _unsent_alerts.length; i++) {
-            if (_unsent_alerts[i] == event_str) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private void remove_unsent_alert (string event_str) {
