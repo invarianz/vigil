@@ -50,18 +50,16 @@
     <value key="x-appcenter-color-primary-text">#ffffff</value>
   </custom>
 
-  <!-- TODO: Add screenshots before AppCenter submission
   <screenshots>
     <screenshot type="default">
       <caption>Vigil monitoring dashboard</caption>
-      <image>https://raw.githubusercontent.com/invarianz/Vigil/main/data/screenshots/dashboard.png</image>
+      <image>https://raw.githubusercontent.com/invarianz/vigil/main/data/screenshots/Status.png</image>
     </screenshot>
     <screenshot>
       <caption>Settings and Matrix configuration</caption>
-      <image>https://raw.githubusercontent.com/invarianz/Vigil/main/data/screenshots/settings.png</image>
+      <image>https://raw.githubusercontent.com/invarianz/vigil/main/data/screenshots/Settings.png</image>
     </screenshot>
   </screenshots>
-  -->
 
   <releases>
     <release version="1.0.0" date="2025-01-01">
