@@ -1,9 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  Vigil application icon (placeholder).
-  Replace this with a professionally designed icon before publishing.
-  elementary OS requires a 128x128 SVG with flat style and rounded corners.
--->
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
