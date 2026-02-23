@@ -22,7 +22,7 @@
       <li>Works on both X11 and Wayland (including elementary OS 7 and 8)</li>
       <li>End-to-end encrypted delivery via Matrix (Megolm/Olm)</li>
       <li>Queues screenshots for upload when offline with automatic retry</li>
-      <li>Heartbeat messages so your partner knows monitoring is active</li>
+      <li>Online, offline, sleep, and wake notices sent to your partner</li>
       <li>Tamper detection alerts sent immediately to your partner</li>
       <li>Settings lock with partner-held unlock code</li>
       <li>Follows elementary OS Human Interface Guidelines</li>

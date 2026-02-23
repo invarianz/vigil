@@ -816,9 +816,6 @@ public class Vigil.Services.TamperDetectionService : Object {
                 return "Screenshot timing was changed to take very " +
                     "few screenshots. Long gaps between screenshots " +
                     "mean activity is going unmonitored.";
-            case "timer_tampered":
-                return "A service timer was changed to a very " +
-                    "long interval. Problems will be detected much slower.";
             case "matrix_cleared":
                 return "All connection settings were deleted. " +
                     "Vigil can no longer send you messages or screenshots.";
