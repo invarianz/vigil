@@ -41,7 +41,6 @@ public class Vigil.Widgets.RangeScale : Gtk.Widget {
         }
     }
 
-    private const int THUMB_SIZE = 14;
     private const int THUMB_RADIUS = 7;
     private const int TRACK_HEIGHT = 3;
     private const int H_PADDING = THUMB_RADIUS + 2;

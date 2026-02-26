@@ -76,7 +76,7 @@ engine_test_exe = executable(
     'MonitoringEngineTest.vala',
     test_utils,
     files(meson.project_source_root() / 'src' / 'MonitoringEngine.vala'),
-    dependencies: [vigil_service_dep, json_dep],
+    dependencies: [vigil_service_dep],
     install: false,
 )
 

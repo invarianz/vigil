@@ -189,8 +189,8 @@ public class Vigil.Application : Gtk.Application {
         bool system_shutdown = _engine != null && _engine.system_shutdown_pending;
 
         // If this is NOT a system shutdown, send alert + "going offline" notice.
-        // System shutdowns already sent theirs in on_prepare_for_shutdown
-        // while the network was still up.
+        // System shutdowns already sent theirs via the logind
+        // PrepareForShutdown signal while the network was still up.
         if (!system_shutdown && _matrix_svc != null && _matrix_svc.is_configured) {
             bool locked = _settings != null &&
                 _settings.get_boolean ("settings-locked");

@@ -26,7 +26,9 @@ public class Vigil.MonitoringEngine : Object {
     private int _consecutive_upload_failures = 0;
     private const int UPLOAD_FAILURE_THRESHOLD = 3;
     private int64 _start_monotonic;
-    private DBusProxy? _login1_proxy = null;
+    private Xdp.Portal? _session_portal = null;
+    private DBusConnection? _system_bus = null;
+    private bool _was_going_offline = false;
 
     /* Properties */
 
@@ -97,32 +99,6 @@ public class Vigil.MonitoringEngine : Object {
     }
 
     /**
-     * Get a JSON blob with the full engine status.
-     */
-    public string get_status_json () {
-        var builder = new Json.Builder ();
-        builder.begin_object ();
-
-        builder.set_member_name ("monitoring_active");
-        builder.add_boolean_value (monitoring_active);
-
-        builder.set_member_name ("backend");
-        builder.add_string_value (active_backend_name);
-
-        builder.set_member_name ("next_capture");
-        builder.add_string_value (next_capture_time_iso);
-
-        builder.set_member_name ("last_capture");
-        builder.add_string_value (last_capture_time_iso);
-
-        builder.end_object ();
-
-        var gen = new Json.Generator ();
-        gen.set_root (builder.get_root ());
-        return gen.to_data (null);
-    }
-
-    /**
      * Initialize all services and start monitoring if configured.
      */
     public async void initialize () {
@@ -137,25 +113,34 @@ public class Vigil.MonitoringEngine : Object {
                 "Capture counter file HMAC is invalid (file was modified)");
         }
 
-        // Subscribe to login1 PrepareForShutdown/PrepareForSleep via
-        // GDBusProxy. Raw signal_subscribe does not receive broadcast
-        // signals inside the Flatpak sandbox; GDBusProxy adds a match
-        // rule that the xdg-dbus-proxy honours.
+        // Subscribe to sleep/resume and shutdown via logind on the system
+        // bus. The XDG Session Monitor Portal does NOT forward logind's
+        // PrepareForSleep signal (xdg-desktop-portal#137, open since 2017),
+        // and its QUERY_END/ENDING states only cover logout — not shutdown
+        // initiated via systemctl/power button. logind covers all cases.
         try {
-            _login1_proxy = yield new DBusProxy.for_bus (
-                BusType.SYSTEM,
-                DBusProxyFlags.DO_NOT_LOAD_PROPERTIES |
-                    DBusProxyFlags.DO_NOT_AUTO_START,
-                null,
+            _system_bus = yield Bus.get (BusType.SYSTEM, null);
+            _system_bus.signal_subscribe (
                 "org.freedesktop.login1",
-                "/org/freedesktop/login1",
                 "org.freedesktop.login1.Manager",
-                null
+                "PrepareForSleep",
+                "/org/freedesktop/login1",
+                null,
+                DBusSignalFlags.NONE,
+                on_prepare_for_sleep
             );
-            _login1_proxy.g_signal.connect (on_login1_signal);
-            debug ("Connected to login1 proxy for sleep/shutdown signals");
+            _system_bus.signal_subscribe (
+                "org.freedesktop.login1",
+                "org.freedesktop.login1.Manager",
+                "PrepareForShutdown",
+                "/org/freedesktop/login1",
+                null,
+                DBusSignalFlags.NONE,
+                on_prepare_for_shutdown
+            );
+            debug ("Subscribed to logind PrepareForSleep/PrepareForShutdown");
         } catch (Error e) {
-            debug ("Could not connect to login1: %s", e.message);
+            debug ("Could not subscribe to logind signals: %s", e.message);
         }
 
         yield _screenshot_svc.initialize ();
@@ -216,23 +201,30 @@ public class Vigil.MonitoringEngine : Object {
         status_changed ();
     }
 
-    private void on_login1_signal (DBusProxy proxy, string? sender,
-        string signal_name, Variant parameters) {
-        if (signal_name == "PrepareForShutdown") {
-            bool active;
-            parameters.get ("(b)", out active);
-            if (active) {
-                system_shutdown_pending = true;
-                send_shutdown_notice ();
-            }
-        } else if (signal_name == "PrepareForSleep") {
-            bool active;
-            parameters.get ("(b)", out active);
-            if (active) {
-                send_sleep_notice ();
-            } else {
-                send_online_notice ("Computer resumed from sleep.");
-            }
+    private void on_prepare_for_sleep (DBusConnection connection,
+        string? sender_name, string object_path,
+        string interface_name, string signal_name,
+        Variant parameters) {
+        bool going_to_sleep = parameters.get_child_value (0).get_boolean ();
+        debug ("PrepareForSleep(%s)", going_to_sleep.to_string ());
+        if (going_to_sleep) {
+            _was_going_offline = true;
+            send_sleep_notice ();
+        } else if (_was_going_offline) {
+            _was_going_offline = false;
+            send_online_notice ("Computer resumed from sleep.");
+        }
+    }
+
+    private void on_prepare_for_shutdown (DBusConnection connection,
+        string? sender_name, string object_path,
+        string interface_name, string signal_name,
+        Variant parameters) {
+        bool shutting_down = parameters.get_child_value (0).get_boolean ();
+        debug ("PrepareForShutdown(%s)", shutting_down.to_string ());
+        if (shutting_down) {
+            system_shutdown_pending = true;
+            send_shutdown_notice ();
         }
     }
 
@@ -649,7 +641,10 @@ public class Vigil.MonitoringEngine : Object {
      */
     private async void request_background_portal () {
         try {
-            var portal = new Xdp.Portal ();
+            if (_session_portal == null) {
+                _session_portal = new Xdp.Portal ();
+            }
+            var portal = _session_portal;
 
             var commandline = new GenericArray<unowned string> ();
             commandline.add ("io.github.invarianz.vigil");

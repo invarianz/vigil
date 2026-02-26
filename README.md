@@ -159,7 +159,7 @@ Failed alerts are persisted to disk and retried after each successful screenshot
 
 ### Manual stop or uninstall
 
-If Vigil is stopped with `flatpak kill`, terminated with SIGTERM, or uninstalled, it detects that this was NOT a system shutdown (no `PrepareForShutdown` signal from systemd-logind) and sends a tamper alert (if settings are locked) or warning (if unlocked) before going offline.
+If Vigil is stopped with `flatpak kill`, terminated with SIGTERM, or uninstalled, it detects that this was NOT a system shutdown (no `PrepareForShutdown` signal from logind) and sends a tamper alert (if settings are locked) or warning (if unlocked) before going offline.
 
 If Vigil is killed with `kill -9` or the power is pulled, there is no opportunity to send any message. Your partner will notice that screenshots have stopped arriving without a "Going offline" notice.
 

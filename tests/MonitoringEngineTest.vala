@@ -60,22 +60,13 @@ void test_initial_state () {
     cleanup_storage ();
 }
 
-void test_get_status_json () {
+void test_status_properties () {
     var engine = create_test_engine ();
 
-    var json_str = engine.get_status_json ();
-    var parser = new Json.Parser ();
-    try {
-        parser.load_from_data (json_str);
-
-        var root = parser.get_root ().get_object ();
-        assert_true (root.has_member ("monitoring_active"));
-        assert_true (root.has_member ("backend"));
-        assert_true (root.has_member ("next_capture"));
-        assert_true (root.has_member ("last_capture"));
-    } catch (Error e) {
-        Test.fail_printf ("get_status_json failed: %s", e.message);
-    }
+    assert_false (engine.monitoring_active);
+    assert_true (engine.active_backend_name == "none");
+    assert_true (engine.next_capture_time_iso == "");
+    assert_true (engine.last_capture_time_iso == "");
 
     cleanup_storage ();
 }
@@ -117,7 +108,7 @@ public static int main (string[] args) {
     Test.init (ref args);
 
     Test.add_func ("/monitoring_engine/initial_state", test_initial_state);
-    Test.add_func ("/monitoring_engine/get_status_json", test_get_status_json);
+    Test.add_func ("/monitoring_engine/status_properties", test_status_properties);
     Test.add_func ("/monitoring_engine/tamper_events_propagated", test_tamper_events_propagated);
 
     return Test.run ();

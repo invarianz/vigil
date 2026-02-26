@@ -122,25 +122,15 @@ public class Vigil.MainWindow : Gtk.ApplicationWindow {
     }
 
     private void refresh_status () {
-        // Read monitoring state from GSettings (source of truth)
         status_view.set_monitoring_active (settings.get_boolean ("monitoring-enabled"));
         status_view.set_backend_name (_engine.active_backend_name);
 
-        var status_json = _engine.get_status_json ();
-        var parser = new Json.Parser ();
-        try {
-            parser.load_from_data (status_json);
-            var obj = parser.get_root ().get_object ();
-
-            var last_iso = obj.get_string_member ("last_capture");
-            if (last_iso != "") {
-                var last = new DateTime.from_iso8601 (last_iso, new TimeZone.local ());
-                status_view.set_last_capture_time (last);
-            } else {
-                status_view.set_last_capture_time (null);
-            }
-        } catch (Error e) {
-            debug ("Failed to parse status JSON: %s", e.message);
+        var last_iso = _engine.last_capture_time_iso;
+        if (last_iso != "") {
+            status_view.set_last_capture_time (
+                new DateTime.from_iso8601 (last_iso, new TimeZone.local ()));
+        } else {
+            status_view.set_last_capture_time (null);
         }
     }
 }

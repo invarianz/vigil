@@ -9,12 +9,9 @@ finish-args:
   - '--socket=wayland'
   - '--device=dri'
   - '--share=network'
-  - '--talk-name=org.freedesktop.portal.Desktop'
-  - '--talk-name=org.gnome.Shell.Screenshot'
+  # Sleep/resume and shutdown via logind PrepareForSleep/PrepareForShutdown.
+  # The XDG Session Monitor Portal does not forward these (xdg-desktop-portal#137).
   - '--system-talk-name=org.freedesktop.login1'
-  - '--talk-name=ca.desrt.dconf'
-  - '--filesystem=xdg-config/dconf:rw'
-  - '--env=DCONF_USER_CONFIG_DIR=.config/dconf'
 
 modules:
   - name: libolm
