@@ -29,11 +29,11 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: vigil-${{ matrix.arch }}.flatpak
+          bundle: ${{ startsWith(github.ref, 'refs/tags/') && format('vigil-{0}.flatpak', matrix.arch) || '' }}
           manifest-path: io.github.invarianz.vigil.yml
           repository-name: appcenter
           repository-url: https://flatpak.elementary.io/repo.flatpakrepo
-          cache-key: flatpak-builder-${{ github.sha }}
+          cache-key: flatpak-builder-${{ matrix.arch }}
           arch: ${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v4
